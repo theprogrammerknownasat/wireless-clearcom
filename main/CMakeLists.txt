@@ -12,11 +12,12 @@ idf_component_register(
         # Phase 3 network files:
         "network/wifi_manager.c"
         "network/udp_transport.c"
-        # Phase 4 hardware files (not yet created):
-        # "hardware/gpio_control.c"
-        # "hardware/battery.c"
-        # "hardware/clearcom_line.c"
-        # Phase 5 system files (not yet created):
+        # Phase 4 hardware files:
+        "hardware/gpio_control.c"
+        "hardware/battery.c"
+        "hardware/clearcom_line.c"
+        "hardware/ptt_control.c"
+        # Phase 5 diagnostics:
         # "system/diagnostics.c"
         # "system/power_manager.c"
         # "system/call_module.c"
@@ -36,6 +37,7 @@ idf_component_register(
         esp_system
         driver
         esp-opus
+        esp_adc
 )
 
 # Set C standard
