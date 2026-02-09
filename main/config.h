@@ -14,8 +14,8 @@
 //=============================================================================
 // Uncomment EXACTLY ONE of the following:
 
-#define BUILD_BASE_STATION
-// #define BUILD_BELT_PACK
+//#define BUILD_BASE_STATION
+#define BUILD_BELT_PACK
 
 //=============================================================================
 // Automatic Configuration Loading

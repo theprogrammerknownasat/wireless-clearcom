@@ -258,18 +258,18 @@ void device_manager_print_status(void)
     uint32_t uptime_sec_remainder = uptime_sec % 60;
 
     ESP_LOGI(TAG, "╔════════════════════════════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║ %s - ID: 0x%02X - Uptime: %02d:%02d                        ║",
+    ESP_LOGI(TAG, "║ %s - ID: 0x%02X - Uptime: %02d:%02d                       ║",
              DEVICE_TYPE_STRING, info->device_id, uptime_min, uptime_sec_remainder);
     ESP_LOGI(TAG, "╠════════════════════════════════════════════════════════════╣");
     ESP_LOGI(TAG, "║ State: %d | WiFi: %s | RSSI: %d dBm                        ║",
              info->state, info->wifi_connected ? "CONN" : "DISC", info->rssi);
-    ESP_LOGI(TAG, "║ TX: %6lu | RX: %6lu | Lost: %4lu                           ║",
+    ESP_LOGI(TAG, "║ TX: %6lu | RX: %6lu | Lost: %4lu                       ║",
              (unsigned long)info->packets_sent,
              (unsigned long)info->packets_received,
              (unsigned long)info->packets_lost);
 
 #if DEVICE_TYPE_PACK
-    ESP_LOGI(TAG, "║ PTT: %d | Call: %d | Battery: %.2fV (%d%%)                 ║",
+    ESP_LOGI(TAG, "║ PTT: %d | Call: %d | Battery: %.2fV (%d%%)                    ║",
              info->ptt_state, info->call_active,
              info->battery_voltage, info->battery_percent);
 #else

@@ -4,12 +4,12 @@ idf_component_register(
         SRCS
         "main.c"
         "system/device_manager.c"
-        # Phase 2 audio files (not yet created):
-        # "audio/audio_codec.c"
-        # "audio/audio_opus.c"
-        # "audio/audio_processor.c"
-        # "audio/audio_limiter.c"
-        # "audio/audio_tones.c"
+        # Phase 2 audio files:
+        "audio/audio_codec.c"
+        "audio/audio_opus.c"
+        "audio/audio_processor.c"
+        "audio/audio_limiter.c"
+        "audio/audio_tones.c"
         # Phase 3 network files (not yet created):
         # "network/wifi_manager.c"
         # "network/udp_transport.c"
@@ -35,8 +35,8 @@ idf_component_register(
         esp_netif
         esp_timer
         esp_system
-        # Will add when we integrate Opus:
-        # esp-opus
+        driver
+        esp-opus
 )
 
 # Set C standard

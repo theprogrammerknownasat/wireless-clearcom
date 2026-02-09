@@ -16,6 +16,10 @@
 
 #include "config.h"
 #include "system/device_manager.h"
+#include "audio/audio_codec.h"
+#include "audio/audio_opus.h"
+#include "audio/audio_processor.h"
+#include "audio/audio_tones.h"
 
 static const char *TAG = "MAIN";
 
@@ -24,6 +28,7 @@ static const char *TAG = "MAIN";
 //=============================================================================
 
 static void stats_task(void *arg);
+static void audio_test_task(void *arg);
 
 //=============================================================================
 // MAIN APPLICATION
@@ -48,7 +53,7 @@ void app_main(void)
 #endif
     ESP_LOGI(TAG, "========================================");
 
-    // Initialize NVS (required for Wi-Fi)
+    // Initialize NVS (required for WiFi)
     ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_LOGW(TAG, "NVS flash needs erasing, erasing now...");
@@ -68,11 +73,48 @@ void app_main(void)
     // Set log level from config
     esp_log_level_set("*", LOG_LEVEL);
 
-    ESP_LOGI(TAG, "Phase 1: Foundation complete");
-    ESP_LOGI(TAG, "Waiting for Phase 2: Audio subsystem...");
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, " PHASE 2: AUDIO SUBSYSTEM TEST");
+    ESP_LOGI(TAG, "========================================");
 
-    // Start stats task
-    xTaskCreate(stats_task, "stats", 4096, NULL, 3, NULL);
+    // Initialize audio subsystem
+    ESP_LOGI(TAG, "Initializing audio codec...");
+    ret = audio_codec_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Audio codec init failed: %d", ret);
+    }
+
+    ESP_LOGI(TAG, "Initializing Opus codec...");
+    ret = audio_opus_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Opus init failed: %d", ret);
+    }
+
+    ESP_LOGI(TAG, "Initializing audio processor...");
+    ret = audio_processor_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Audio processor init failed: %d", ret);
+    }
+
+    ESP_LOGI(TAG, "Initializing tone generator...");
+    ret = audio_tones_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Tone generator init failed: %d", ret);
+    }
+
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, " Audio subsystem initialized!");
+    ESP_LOGI(TAG, "========================================");
+
+    // Set initial audio configuration
+    audio_codec_set_input(CODEC_INPUT_MIC);
+    audio_codec_set_output(CODEC_OUTPUT_SPEAKER);
+    audio_codec_set_input_gain(MIC_GAIN_LEVEL);
+
+    ESP_LOGI(TAG, "Starting test tasks...");
+
+    // Start audio test task
+    xTaskCreate(audio_test_task, "audio_test", 8192, NULL, 5, NULL);
 
     // Device manager is initialized and ready
     device_manager_set_state(DEVICE_STATE_INIT);
@@ -120,5 +162,67 @@ static void stats_task(void *arg)
         if (device_manager_should_sleep()) {
             ESP_LOGW(TAG, "Sleep timeout reached (not implemented yet)");
         }
+    }
+}
+
+//=============================================================================
+// AUDIO TEST TASK
+//=============================================================================
+
+static void audio_test_task(void *arg)
+{
+    ESP_LOGI(TAG, "Audio test task started");
+    ESP_LOGI(TAG, "Testing Opus encode/decode loopback...");
+
+    int16_t pcm_input[SAMPLES_PER_FRAME];
+    int16_t pcm_output[SAMPLES_PER_FRAME];
+    uint8_t opus_data[OPUS_MAX_PACKET_SIZE];
+
+    float test_phase = 0.0f;
+    uint32_t test_count = 0;
+
+    while (1) {
+        // Generate test audio (440Hz sine wave)
+        audio_tones_generate_sine(pcm_input, SAMPLES_PER_FRAME, 440.0f, 0.5f, &test_phase);
+
+        // Encode to Opus
+        int encoded_bytes = audio_opus_encode(pcm_input, SAMPLES_PER_FRAME,
+                                              opus_data, OPUS_MAX_PACKET_SIZE);
+
+        if (encoded_bytes < 0) {
+            ESP_LOGE(TAG, "Encode failed: %d", encoded_bytes);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        // Decode from Opus
+        int decoded_samples = audio_opus_decode(opus_data, encoded_bytes,
+                                                pcm_output, SAMPLES_PER_FRAME, 0);
+
+        if (decoded_samples < 0) {
+            ESP_LOGE(TAG, "Decode failed: %d", decoded_samples);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        // Apply limiter
+        audio_processor_limit(pcm_output, decoded_samples, LIMITER_THRESHOLD);
+
+        // Calculate RMS level
+        float rms = audio_processor_get_rms(pcm_output, decoded_samples);
+
+        test_count++;
+
+        if (test_count % 50 == 0) {  // Log every 50 frames (every 1 second at 20ms frames)
+            float avg_encode_ms;
+            uint32_t total_frames;
+            audio_opus_get_stats(&avg_encode_ms, &total_frames);
+
+            ESP_LOGI(TAG, "Opus test: %lu frames, %.2f ms avg encode, RMS=%.3f, %d bytes",
+                     (unsigned long)total_frames, avg_encode_ms, rms, encoded_bytes);
+        }
+
+        // Delay for frame time
+        vTaskDelay(pdMS_TO_TICKS(FRAME_SIZE_MS));
     }
 }
