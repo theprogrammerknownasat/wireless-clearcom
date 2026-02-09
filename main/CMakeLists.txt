@@ -8,7 +8,6 @@ idf_component_register(
         "audio/audio_codec.c"
         "audio/audio_opus.c"
         "audio/audio_processor.c"
-        "audio/audio_limiter.c"
         "audio/audio_tones.c"
         # Phase 3 network files (not yet created):
         # "network/wifi_manager.c"

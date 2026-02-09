@@ -4,6 +4,9 @@
  */
 
 #include "audio_tones.h"
+
+#include <esp_timer.h>
+
 #include "../config.h"
 #include "esp_log.h"
 #include <math.h>
