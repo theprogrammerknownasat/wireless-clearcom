@@ -28,6 +28,7 @@ static bool initialized = false;
  * @param voltage Battery voltage
  * @return Battery percentage (0-100)
  */
+#if DEVICE_TYPE_PACK
 static uint8_t calculate_battery_percent(float voltage)
 {
     // LiPo discharge curve (non-linear)
@@ -49,6 +50,7 @@ static uint8_t calculate_battery_percent(float voltage)
 
     return percent;
 }
+#endif
 
 //=============================================================================
 // PUBLIC FUNCTIONS

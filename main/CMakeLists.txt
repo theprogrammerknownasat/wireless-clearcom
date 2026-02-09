@@ -9,9 +9,9 @@ idf_component_register(
         "audio/audio_opus.c"
         "audio/audio_processor.c"
         "audio/audio_tones.c"
-        # Phase 3 network files (not yet created):
-        # "network/wifi_manager.c"
-        # "network/udp_transport.c"
+        # Phase 3 network files:
+        "network/wifi_manager.c"
+        "network/udp_transport.c"
         # Phase 4 hardware files (not yet created):
         # "hardware/gpio_control.c"
         # "hardware/battery.c"
