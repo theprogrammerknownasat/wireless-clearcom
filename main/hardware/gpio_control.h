@@ -18,11 +18,12 @@
 
 typedef enum {
     LED_POWER = 0,
-    LED_PTT,
-    LED_CALL,
     LED_STATUS,
+    LED_CALL,
+#if DEVICE_TYPE_PACK
+    LED_PTT,
     LED_RECEIVE,
-#if DEVICE_TYPE_BASE
+#else
     LED_PTT_MIRROR,
 #endif
     LED_COUNT

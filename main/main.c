@@ -1,8 +1,9 @@
 /**
  * @file main.c
- * @brief ClearCom Wireless System - Main Entry Point
+ * @brief ClearCom Wireless System - Production Firmware
  *
- * Production firmware for wireless ClearCom RS-701 emulation.
+ * RS-701 compatible wireless intercom system.
+ * Supports both base station (AP) and belt pack (STA) modes.
  */
 
 #include <stdio.h>
@@ -16,62 +17,388 @@
 
 #include "config.h"
 #include "system/device_manager.h"
+#include "system/diagnostics.h"
+#include "system/power_manager.h"
+#include "system/call_module.h"
 #include "audio/audio_codec.h"
 #include "audio/audio_opus.h"
 #include "audio/audio_processor.h"
 #include "audio/audio_tones.h"
 #include "network/wifi_manager.h"
 #include "network/udp_transport.h"
+#include "hardware/gpio_control.h"
+#include "hardware/ptt_control.h"
+#include "hardware/battery.h"
+#include "hardware/clearcom_line.h"
 
 static const char *TAG = "MAIN";
 
 //=============================================================================
-// TASK DECLARATIONS
+// CALLBACK HANDLERS
 //=============================================================================
 
-static void stats_task(void *arg);
-static void audio_test_task(void *arg);
-static void network_test_task(void *arg);
-
-//=============================================================================
-// NETWORK CALLBACKS
-//=============================================================================
-
-static void wifi_event_cb(wifi_event_type_t event, void *data)
+static void wifi_event_handler(wifi_event_type_t event, void *data)
 {
     switch (event) {
         case WIFI_EVENT_CONNECTED:
-            ESP_LOGI(TAG, "✓ WiFi connected");
+            ESP_LOGI(TAG, "WiFi connected");
             device_manager_set_state(DEVICE_STATE_CONNECTED);
             break;
+
         case WIFI_EVENT_DISCONNECTED:
-            ESP_LOGW(TAG, "✗ WiFi disconnected");
+            ESP_LOGW(TAG, "WiFi disconnected - reconnecting...");
             device_manager_set_state(DEVICE_STATE_DISCONNECTED);
             break;
+
         case WIFI_EVENT_GOT_IP:
-            ESP_LOGI(TAG, "✓ Got IP address");
+            ESP_LOGI(TAG, "Got IP address");
             break;
+
         case WIFI_EVENT_STA_JOINED:
-            ESP_LOGI(TAG, "✓ Station connected to AP");
+            ESP_LOGI(TAG, "Belt pack connected");
             break;
+
         case WIFI_EVENT_STA_LEFT:
-            ESP_LOGW(TAG, "✗ Station disconnected from AP");
+            ESP_LOGW(TAG, "Belt pack disconnected");
             break;
     }
 }
 
-static void udp_rx_cb(const uint8_t *opus_data, uint16_t opus_size,
-                      bool ptt_active, bool call_active)
+static void udp_rx_handler(const uint8_t *opus_data, uint16_t opus_size,
+                           bool remote_ptt_active, bool remote_call_active)
 {
-    ESP_LOGD(TAG, "UDP RX: %u bytes, PTT=%d, Call=%d",
-             opus_size, ptt_active, call_active);
+    // Update device manager with packet receipt (for sleep timeout)
+    device_manager_packet_received();
 
-    // In full implementation, this would decode and play audio
-    // For now, just acknowledge receipt
+#if DEVICE_TYPE_PACK
+    // Update power manager (keep awake)
+    power_manager_activity();
+#endif
+
+    // Update call state based on remote signal
+    call_module_remote_signal(remote_call_active);
+
+    // Decode and play audio
+    int16_t pcm_output[SAMPLES_PER_FRAME];
+    int decoded = audio_opus_decode(opus_data, opus_size, pcm_output, SAMPLES_PER_FRAME, 0);
+
+    if (decoded > 0) {
+        // Apply limiting
+        audio_processor_limit(pcm_output, decoded, LIMITER_THRESHOLD);
+
+        // Write to speaker/headset
+        audio_codec_write(pcm_output, decoded);
+    }
+}
+
+static void ptt_state_handler(ptt_state_t state, bool transmitting)
+{
+    ESP_LOGI(TAG, "PTT: %s", transmitting ? "ON" : "OFF");
+
+    // Update device manager with PTT state
+    device_manager_set_ptt_state(state);
+
+    // Update LED
+#if DEVICE_TYPE_PACK
+    gpio_control_set_led(LED_PTT, transmitting ? LED_ON : LED_OFF);
+#else
+    gpio_control_set_led(LED_PTT_MIRROR, transmitting ? LED_ON : LED_OFF);
+#endif
+
+#if DEVICE_TYPE_PACK
+    // Keep device awake during PTT
+    if (transmitting) {
+        power_manager_activity();
+    }
+#endif
+}
+
+static void call_state_handler(call_state_t state, bool is_calling)
+{
+    const char *state_str =
+        state == CALL_IDLE ? "IDLE" :
+        state == CALL_OUTGOING ? "CALLING" :
+        state == CALL_INCOMING ? "INCOMING" : "ACKNOWLEDGED";
+
+    ESP_LOGI(TAG, "Call: %s", state_str);
+
+    // Update call LED
+    if (state == CALL_OUTGOING) {
+        gpio_control_set_led(LED_CALL, LED_BLINK_SLOW);
+    } else if (state == CALL_INCOMING) {
+        gpio_control_set_led(LED_CALL, LED_BLINK_FAST);
+    } else if (state == CALL_ACKNOWLEDGED) {
+        gpio_control_set_led(LED_CALL, LED_ON);
+    } else {
+        gpio_control_set_led(LED_CALL, LED_OFF);
+    }
+}
+
+#if DEVICE_TYPE_PACK
+static void ptt_button_handler(bool pressed, uint32_t hold_time_ms)
+{
+    ptt_control_button_event(pressed, hold_time_ms);
+
+    // Keep device awake
+    power_manager_activity();
+}
+
+static void call_button_handler(bool pressed)
+{
+    call_module_button_event(pressed);
+
+    // Keep device awake
+    power_manager_activity();
+}
+
+static void battery_status_handler(float voltage, uint8_t percent,
+                                   bool is_low, bool is_critical)
+{
+    device_manager_update_battery(voltage);
+
+    // Play warning tones
+    if (is_critical && TONE_BATTERY_CRITICAL_ENABLE) {
+        // Play critical battery tone
+        audio_tones_play(TONE_BATTERY_CRITICAL.frequency_hz,
+                        TONE_BATTERY_CRITICAL.duration_ms, 0.3f);
+    } else if (is_low && TONE_BATTERY_LOW_ENABLE) {
+        // Play low battery tone
+        audio_tones_play(TONE_BATTERY_LOW.frequency_hz,
+                        TONE_BATTERY_LOW.duration_ms, 0.3f);
+    }
+}
+
+static void power_state_handler(power_state_t state)
+{
+    ESP_LOGI(TAG, "Power state: %s",
+             state == POWER_STATE_ACTIVE ? "ACTIVE" :
+             state == POWER_STATE_LIGHT_SLEEP ? "LIGHT_SLEEP" : "DEEP_SLEEP");
+}
+#endif
+
+//=============================================================================
+// AUDIO TASK
+//=============================================================================
+
+static void audio_task(void *arg)
+{
+    ESP_LOGI(TAG, "Audio task started");
+
+    int16_t pcm_input[SAMPLES_PER_FRAME];
+    uint8_t opus_data[OPUS_MAX_PACKET_SIZE];
+
+    while (1) {
+        // Read audio from mic or party line
+        esp_err_t ret = audio_codec_read(pcm_input, SAMPLES_PER_FRAME);
+
+        if (ret == ESP_OK) {
+            // Check if we should transmit
+            bool should_transmit = ptt_control_is_transmitting();
+
+            if (should_transmit) {
+                // Encode to Opus
+                int encoded_bytes = audio_opus_encode(pcm_input, SAMPLES_PER_FRAME,
+                                                     opus_data, OPUS_MAX_PACKET_SIZE);
+
+                if (encoded_bytes > 0) {
+                    // Get call state
+                    bool call_active = call_module_is_calling();
+
+                    // Send over network
+                    udp_transport_send(opus_data, encoded_bytes, true, call_active);
+                }
+            }
+        }
+
+        // Run at frame rate (20ms)
+        vTaskDelay(pdMS_TO_TICKS(FRAME_SIZE_MS));
+    }
 }
 
 //=============================================================================
-// MAIN APPLICATION
+// MONITORING TASK
+//=============================================================================
+
+static void monitor_task(void *arg)
+{
+    ESP_LOGI(TAG, "Monitor task started");
+
+    TickType_t last_wake = xTaskGetTickCount();
+    uint32_t stats_counter = 0;
+
+    while (1) {
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(1000));  // 1Hz
+
+        stats_counter++;
+
+        // Print status every 5 seconds
+        if (stats_counter % 5 == 0) {
+            device_manager_print_status();
+
+            // Print network stats
+            udp_stats_t stats;
+            udp_transport_get_stats(&stats);
+
+            ESP_LOGI(TAG, "Network: TX=%lu, RX=%lu, Loss=%.2f%%",
+                     (unsigned long)stats.packets_sent,
+                     (unsigned long)stats.packets_received,
+                     stats.packet_loss_percent);
+        }
+
+#if DEVICE_TYPE_PACK
+        // Check for sleep timeout
+        bool light_sleep, deep_sleep;
+        power_manager_check_timeout(&light_sleep, &deep_sleep);
+
+        if (deep_sleep) {
+            ESP_LOGW(TAG, "Deep sleep timeout - shutting down");
+            power_manager_enter_deep_sleep();
+            // Never returns
+        } else if (light_sleep) {
+            ESP_LOGI(TAG, "Light sleep timeout - entering sleep");
+            power_manager_enter_light_sleep();
+        }
+#endif
+    }
+}
+
+//=============================================================================
+// INITIALIZATION
+//=============================================================================
+
+static esp_err_t init_subsystems(void)
+{
+    esp_err_t ret;
+
+    // Device manager
+    ESP_LOGI(TAG, "Initializing device manager...");
+    ret = device_manager_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Device manager init failed");
+        return ret;
+    }
+
+    // Audio subsystem
+    ESP_LOGI(TAG, "Initializing audio...");
+    ret = audio_codec_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Audio codec init failed");
+        return ret;
+    }
+
+    ret = audio_opus_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Opus init failed");
+        return ret;
+    }
+
+    ret = audio_processor_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Audio processor init failed");
+        return ret;
+    }
+
+    ret = audio_tones_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Tone generator init failed");
+        return ret;
+    }
+
+    // Network subsystem
+    ESP_LOGI(TAG, "Initializing network...");
+    ret = wifi_manager_init(wifi_event_handler);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi manager init failed");
+        return ret;
+    }
+
+    ret = wifi_manager_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi start failed");
+        return ret;
+    }
+
+    ret = udp_transport_init(udp_rx_handler);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "UDP transport init failed");
+        return ret;
+    }
+
+    ret = udp_transport_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "UDP transport start failed");
+        return ret;
+    }
+
+    // Hardware subsystem
+    ESP_LOGI(TAG, "Initializing hardware...");
+
+#if DEVICE_TYPE_PACK
+    ret = gpio_control_init(ptt_button_handler, call_button_handler);
+#else
+    ret = gpio_control_init(NULL, NULL);  // Base has no buttons
+#endif
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "GPIO control init failed");
+        return ret;
+    }
+
+    ret = ptt_control_init(ptt_state_handler);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "PTT control init failed");
+        return ret;
+    }
+
+#if DEVICE_TYPE_PACK
+    ret = battery_init(battery_status_handler);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Battery init failed");
+        return ret;
+    }
+
+    ret = battery_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Battery start failed");
+        return ret;
+    }
+#endif
+
+#if DEVICE_TYPE_BASE
+    ret = clearcom_line_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "ClearCom line init failed");
+        return ret;
+    }
+
+    ret = clearcom_line_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "ClearCom line start failed");
+        return ret;
+    }
+#endif
+
+    // System services
+    ESP_LOGI(TAG, "Initializing system services...");
+
+    ret = call_module_init(call_state_handler);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Call module init failed");
+        return ret;
+    }
+
+#if DEVICE_TYPE_PACK
+    ret = power_manager_init(power_state_handler);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Power manager init failed");
+        return ret;
+    }
+#endif
+
+    return ESP_OK;
+}
+
+//=============================================================================
+// MAIN ENTRY POINT
 //=============================================================================
 
 void app_main(void)
@@ -83,8 +410,8 @@ void app_main(void)
     ESP_LOGI(TAG, "  ClearCom Wireless System");
     ESP_LOGI(TAG, "  %s", DEVICE_TYPE_STRING);
     ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "Firmware Version: %s", FIRMWARE_VERSION);
-    ESP_LOGI(TAG, "Build Date: %s %s", BUILD_DATE, BUILD_TIME);
+    ESP_LOGI(TAG, "Firmware: %s", FIRMWARE_VERSION);
+    ESP_LOGI(TAG, "Build: %s %s", BUILD_DATE, BUILD_TIME);
     ESP_LOGI(TAG, "Device ID: 0x%02X", DEVICE_ID);
 #if DEVICE_TYPE_BASE
     ESP_LOGI(TAG, "Paired Pack: 0x%02X", PAIRED_PACK_ID);
@@ -93,369 +420,71 @@ void app_main(void)
 #endif
     ESP_LOGI(TAG, "========================================");
 
-    // Initialize NVS (required for WiFi)
+    // Print system info
+    diagnostics_print_system_info();
+
+    // Initialize NVS
     ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_LOGW(TAG, "NVS flash needs erasing, erasing now...");
+        ESP_LOGW(TAG, "Erasing NVS flash...");
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-    ESP_LOGI(TAG, "NVS initialized");
 
-    // Initialize device manager
-    ret = device_manager_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize device manager: %d", ret);
-        return;
-    }
-
-    // Set log level from config
+    // Set log level
     esp_log_level_set("*", LOG_LEVEL);
 
-    ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, " PHASE 2: AUDIO SUBSYSTEM TEST");
-    ESP_LOGI(TAG, "========================================");
+    // Run self-test
+    ESP_LOGI(TAG, "Running system self-test...");
+    diagnostics_result_t diag_results;
+    ret = diagnostics_run_self_test(&diag_results);
 
-    // Initialize audio subsystem
-    ESP_LOGI(TAG, "Initializing audio codec...");
-    ret = audio_codec_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Audio codec init failed: %d", ret);
+        ESP_LOGE(TAG, "Self-test failed!");
+        // System will halt in diagnostics if critical failure
     }
 
-    ESP_LOGI(TAG, "Initializing Opus codec...");
-    ret = audio_opus_init();
+    // Initialize all subsystems
+    ESP_LOGI(TAG, "Initializing subsystems...");
+    ret = init_subsystems();
+
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Opus init failed: %d", ret);
+        ESP_LOGE(TAG, "Subsystem initialization failed!");
+        while(1) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
     }
 
-    ESP_LOGI(TAG, "Initializing audio processor...");
-    ret = audio_processor_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Audio processor init failed: %d", ret);
-    }
-
-    ESP_LOGI(TAG, "Initializing tone generator...");
-    ret = audio_tones_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Tone generator init failed: %d", ret);
-    }
-
-    ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, " Audio subsystem initialized!");
-    ESP_LOGI(TAG, "========================================");
-
-    ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, " PHASE 3: NETWORK SUBSYSTEM");
-    ESP_LOGI(TAG, "========================================");
-
-    // Initialize network subsystem
-    ESP_LOGI(TAG, "Initializing WiFi manager...");
-    ret = wifi_manager_init(wifi_event_cb);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi manager init failed: %d", ret);
-    }
-
-    ESP_LOGI(TAG, "Starting WiFi...");
-    ret = wifi_manager_start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi start failed: %d", ret);
-    }
-
-    // Wait for WiFi to connect (give it a few seconds)
+    // Wait for WiFi connection
     ESP_LOGI(TAG, "Waiting for WiFi connection...");
     vTaskDelay(pdMS_TO_TICKS(3000));
 
-    ESP_LOGI(TAG, "Initializing UDP transport...");
-    ret = udp_transport_init(udp_rx_cb);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "UDP transport init failed: %d", ret);
-    }
-
-    ESP_LOGI(TAG, "Starting UDP transport...");
-    ret = udp_transport_start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "UDP transport start failed: %d", ret);
-    }
-
-    ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, " Network subsystem initialized!");
-    ESP_LOGI(TAG, "========================================");
-
-    // Set initial audio configuration
+    // Set audio configuration
+#if DEVICE_TYPE_PACK
     audio_codec_set_input(CODEC_INPUT_MIC);
     audio_codec_set_output(CODEC_OUTPUT_SPEAKER);
     audio_codec_set_input_gain(MIC_GAIN_LEVEL);
-
-    ESP_LOGI(TAG, "Starting test tasks...");
-
-    // Start network test task
-    xTaskCreate(network_test_task, "net_test", 8192, NULL, 4, NULL);
-
-    // Start audio test task (commented out for Phase 3 testing)
-    // xTaskCreate(audio_test_task, "audio_test", 32768, NULL, 5, NULL);
-
-    // Device manager is initialized and ready
-    device_manager_set_state(DEVICE_STATE_INIT);
-
-    ESP_LOGI(TAG, "System initialized, entering main loop");
-    ESP_LOGI(TAG, "========================================");
-
-    // Main loop placeholder
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-
-        // Update device state (placeholder)
-        device_info_t *info = device_manager_get_info();
-        if (info) {
-            // Simulate battery drain (pack only, for testing)
-#if DEVICE_TYPE_PACK
-            static float test_voltage = BATTERY_FULL_VOLTAGE;
-            test_voltage -= 0.001f; // Slow drain
-            if (test_voltage < BATTERY_EMPTY_VOLTAGE) {
-                test_voltage = BATTERY_FULL_VOLTAGE; // Reset for testing
-            }
-            device_manager_update_battery(test_voltage);
-#endif
-        }
-    }
-}
-
-//=============================================================================
-// STATS TASK
-//=============================================================================
-
-static void stats_task(void *arg)
-{
-    TickType_t last_wake = xTaskGetTickCount();
-
-    ESP_LOGI(TAG, "Stats task started (interval: %d ms)", STATS_INTERVAL_MS);
-
-    while (1) {
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(STATS_INTERVAL_MS));
-
-        // Print device status
-        device_manager_print_status();
-
-        // Check for sleep condition (pack only)
-        if (device_manager_should_sleep()) {
-            ESP_LOGW(TAG, "Sleep timeout reached (not implemented yet)");
-        }
-    }
-}
-
-//=============================================================================
-// AUDIO TEST TASK
-//=============================================================================
-
-static void audio_test_task(void *arg)
-{
-    ESP_LOGI(TAG, "Audio test task started");
-    ESP_LOGI(TAG, "Running audio subsystem tests...");
-
-    int16_t pcm_input[SAMPLES_PER_FRAME];
-    int16_t pcm_output[SAMPLES_PER_FRAME];
-    uint8_t opus_data[OPUS_MAX_PACKET_SIZE];
-
-    float test_phase = 0.0f;
-    uint32_t test_count = 0;
-    bool limiter_tested = false;
-
-    while (1) {
-        // Run limiter test once at startup
-        if (!limiter_tested && test_count == 10) {
-            ESP_LOGI(TAG, "========================================");
-            ESP_LOGI(TAG, "TEST: Audio Limiter");
-            ESP_LOGI(TAG, "========================================");
-
-            // Generate overdriven signal (150% amplitude - should clip without limiter)
-            audio_tones_generate_sine(pcm_input, SAMPLES_PER_FRAME, 1000.0f, 1.5f, &test_phase);
-
-            // Check peak before limiting
-            int16_t peak_before = 0;
-            for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
-                if (abs(pcm_input[i]) > peak_before) peak_before = abs(pcm_input[i]);
-            }
-
-            // Apply limiter
-            audio_processor_limit(pcm_input, SAMPLES_PER_FRAME, LIMITER_THRESHOLD);
-
-            // Check peak after limiting
-            int16_t peak_after = 0;
-            for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
-                if (abs(pcm_input[i]) > peak_after) peak_after = abs(pcm_input[i]);
-            }
-
-            int16_t threshold_value = (int16_t)(32767.0f * LIMITER_THRESHOLD);
-
-            ESP_LOGI(TAG, "Before limiter: peak = %d (%.1f%%)", peak_before, (peak_before / 32767.0f) * 100);
-            ESP_LOGI(TAG, "After limiter:  peak = %d (%.1f%%)", peak_after, (peak_after / 32767.0f) * 100);
-            ESP_LOGI(TAG, "Threshold:      %d (%.1f%%)", threshold_value, LIMITER_THRESHOLD * 100);
-
-            // Limiter uses soft knee, so allow some overshoot
-            int16_t acceptable_peak = threshold_value + 1000;  // Allow 3% overshoot for soft limiting
-
-            if (peak_after <= acceptable_peak) {
-                ESP_LOGI(TAG, "✓ PASS: Limiter prevented clipping (soft knee limiting)");
-            } else {
-                ESP_LOGE(TAG, "✗ FAIL: Limiter did not work correctly");
-            }
-
-            ESP_LOGI(TAG, "Note: Input clamped at 100%% by int16_t max value");
-            ESP_LOGI(TAG, "========================================");
-            limiter_tested = true;
-            test_phase = 0.0f;  // Reset for normal test
-        }
-
-        // Normal Opus encode/decode loopback test
-        audio_tones_generate_sine(pcm_input, SAMPLES_PER_FRAME, 440.0f, 0.5f, &test_phase);
-
-        // Encode to Opus
-        int encoded_bytes = audio_opus_encode(pcm_input, SAMPLES_PER_FRAME,
-                                              opus_data, OPUS_MAX_PACKET_SIZE);
-
-        if (encoded_bytes < 0) {
-            ESP_LOGE(TAG, "Encode failed: %d", encoded_bytes);
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
-        }
-
-        // Decode from Opus
-        int decoded_samples = audio_opus_decode(opus_data, encoded_bytes,
-                                                pcm_output, SAMPLES_PER_FRAME, 0);
-
-        if (decoded_samples < 0) {
-            ESP_LOGE(TAG, "Decode failed: %d", decoded_samples);
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
-        }
-
-        // Apply limiter
-        audio_processor_limit(pcm_output, decoded_samples, LIMITER_THRESHOLD);
-
-        // Calculate RMS level
-        float rms = audio_processor_get_rms(pcm_output, decoded_samples);
-
-        test_count++;
-
-        if (test_count % 50 == 0) {  // Log every 50 frames (every 1 second at 20ms frames)
-            float avg_encode_ms;
-            uint32_t total_frames;
-            audio_opus_get_stats(&avg_encode_ms, &total_frames);
-
-            ESP_LOGI(TAG, "Opus loopback: %lu frames, %.2f ms encode, RMS=%.3f, %d bytes",
-                     (unsigned long)total_frames, avg_encode_ms, rms, encoded_bytes);
-        }
-
-        // Run packet loss test at 100 frames
-        if (test_count == 100) {
-            ESP_LOGI(TAG, "========================================");
-            ESP_LOGI(TAG, "TEST: Opus Packet Loss Concealment");
-            ESP_LOGI(TAG, "========================================");
-
-            // Decode with NULL packet (simulates packet loss)
-            int plc_samples = audio_opus_decode(NULL, 0, pcm_output, SAMPLES_PER_FRAME, 0);
-
-            if (plc_samples > 0) {
-                float plc_rms = audio_processor_get_rms(pcm_output, plc_samples);
-                ESP_LOGI(TAG, "✓ PASS: PLC decoded %d samples, RMS=%.3f", plc_samples, plc_rms);
-                ESP_LOGI(TAG, "Opus filled gap with concealment audio");
-            } else {
-                ESP_LOGE(TAG, "✗ FAIL: PLC failed with error %d", plc_samples);
-            }
-
-            ESP_LOGI(TAG, "========================================");
-        }
-
-        // Delay for frame time
-        vTaskDelay(pdMS_TO_TICKS(FRAME_SIZE_MS));
-    }
-}
-
-//=============================================================================
-// NETWORK TEST TASK
-//=============================================================================
-
-static void network_test_task(void *arg)
-{
-    ESP_LOGI(TAG, "Network test task started");
-    ESP_LOGI(TAG, "Testing WiFi + UDP audio packet transport...");
-
-    // Wait for WiFi to fully connect
-    vTaskDelay(pdMS_TO_TICKS(2000));
-
-    // Test 1: Check WiFi connection
-    ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "TEST: WiFi Connection");
-    ESP_LOGI(TAG, "========================================");
-
-    if (wifi_manager_is_connected()) {
-        char ip_str[16];
-        wifi_manager_get_ip(ip_str);
-        int8_t rssi = wifi_manager_get_rssi();
-
-        ESP_LOGI(TAG, "✓ PASS: WiFi connected");
-        ESP_LOGI(TAG, "IP Address: %s", ip_str);
-#if DEVICE_TYPE_PACK
-        ESP_LOGI(TAG, "RSSI: %d dBm", rssi);
 #else
-        ESP_LOGI(TAG, "Connected stations: %d", wifi_manager_get_sta_count());
+    audio_codec_set_input(CODEC_INPUT_LINE);
+    audio_codec_set_output(CODEC_OUTPUT_LINE);
+    audio_codec_set_input_gain(PARTYLINE_INPUT_GAIN);
 #endif
-    } else {
-        ESP_LOGE(TAG, "✗ FAIL: WiFi not connected");
-    }
+
+    // Set brightness
+    gpio_control_set_brightness(LED_BRIGHTNESS_PCT);
+
+    // Turn on status LED
+    gpio_control_set_led(LED_STATUS, LED_ON);
+
+    // Start tasks
+    ESP_LOGI(TAG, "Starting tasks...");
+    xTaskCreate(audio_task, "audio", 32768, NULL, 6, NULL);
+    xTaskCreate(monitor_task, "monitor", 4096, NULL, 3, NULL);
+
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "  System Ready");
     ESP_LOGI(TAG, "========================================");
 
-    vTaskDelay(pdMS_TO_TICKS(1000));
-
-    // Test 2: Audio packet transmission
-    ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "TEST: UDP Audio Packet Transport");
-    ESP_LOGI(TAG, "========================================");
-
-    uint8_t test_opus_data[60] = {0};  // Fake Opus packet
-    uint32_t test_count = 0;
-
-    while (1) {
-        // Generate fake Opus data (in real system, this comes from encoder)
-        for (int i = 0; i < sizeof(test_opus_data); i++) {
-            test_opus_data[i] = (uint8_t)(test_count + i);
-        }
-
-        // Simulate PTT and Call states
-        bool ptt = (test_count % 100) < 50;  // Toggle every 50 frames
-        bool call = (test_count % 200) < 20; // Pulse every 200 frames
-
-        // Send packet
-        esp_err_t ret = udp_transport_send(test_opus_data, sizeof(test_opus_data),
-                                           ptt, call);
-
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to send packet");
-        }
-
-        test_count++;
-
-        // Log stats every second
-        if (test_count % 50 == 0) {
-            udp_stats_t stats;
-            udp_transport_get_stats(&stats);
-
-            ESP_LOGI(TAG, "Network: TX=%lu, RX=%lu, Lost=%lu, Loss=%.2f%%",
-                     (unsigned long)stats.packets_sent,
-                     (unsigned long)stats.packets_received,
-                     (unsigned long)stats.packets_lost,
-                     stats.packet_loss_percent);
-
-            // Check WiFi quality
-            int8_t rssi = wifi_manager_get_rssi();
-            if (rssi != 0) {
-                ESP_LOGI(TAG, "Signal: %d dBm", rssi);
-            }
-        }
-
-        // Send at 50 Hz (20ms frame rate)
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
+    device_manager_set_state(DEVICE_STATE_CONNECTED);
 }

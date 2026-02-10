@@ -18,9 +18,9 @@ idf_component_register(
         "hardware/clearcom_line.c"
         "hardware/ptt_control.c"
         # Phase 5 diagnostics:
-        # "system/diagnostics.c"
-        # "system/power_manager.c"
-        # "system/call_module.c"
+        "system/diagnostics.c"
+        "system/power_manager.c"
+        "system/call_module.c"
 
         INCLUDE_DIRS
         "."
@@ -38,6 +38,7 @@ idf_component_register(
         driver
         esp-opus
         esp_adc
+        spi_flash
 )
 
 # Set C standard

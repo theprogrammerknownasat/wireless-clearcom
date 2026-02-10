@@ -23,12 +23,12 @@ static bool initialized = false;
 // PRIVATE FUNCTIONS
 //=============================================================================
 
+#if DEVICE_TYPE_PACK
 /**
  * @brief Calculate battery percentage from voltage
  * @param voltage Battery voltage
  * @return Battery percentage (0-100)
  */
-#if DEVICE_TYPE_PACK
 static uint8_t calculate_battery_percent(float voltage)
 {
     // LiPo discharge curve (non-linear)
@@ -50,7 +50,7 @@ static uint8_t calculate_battery_percent(float voltage)
 
     return percent;
 }
-#endif
+#endif // DEVICE_TYPE_PACK
 
 //=============================================================================
 // PUBLIC FUNCTIONS
@@ -85,7 +85,7 @@ esp_err_t device_manager_init(void)
 
     // Set initial state
     device_info.state = DEVICE_STATE_INIT;
-    device_info.ptt_state = PTT_STATE_IDLE;
+    device_info.ptt_state = PTT_IDLE;
     device_info.call_active = false;
 
     // Initialize timing
@@ -140,8 +140,13 @@ void device_manager_set_ptt_state(ptt_state_t state)
     if (!initialized) return;
 
 #if DEVICE_TYPE_PACK
+    // Just update local copy - ptt_control is the source of truth
     if (device_info.ptt_state != state) {
-        ESP_LOGD(TAG, "PTT state: %d -> %d", device_info.ptt_state, state);
+        ESP_LOGD(TAG, "PTT state: %s -> %s",
+                device_info.ptt_state == PTT_IDLE ? "IDLE" :
+                device_info.ptt_state == PTT_LATCHED ? "LATCHED" : "MOMENTARY",
+                state == PTT_IDLE ? "IDLE" :
+                state == PTT_LATCHED ? "LATCHED" : "MOMENTARY");
         device_info.ptt_state = state;
     }
 #endif
@@ -149,7 +154,7 @@ void device_manager_set_ptt_state(ptt_state_t state)
 
 ptt_state_t device_manager_get_ptt_state(void)
 {
-    if (!initialized) return PTT_STATE_IDLE;
+    if (!initialized) return PTT_IDLE;
     return device_info.ptt_state;
 }
 
@@ -158,8 +163,8 @@ bool device_manager_is_transmitting(void)
     if (!initialized) return false;
 
 #if DEVICE_TYPE_PACK
-    return (device_info.ptt_state == PTT_STATE_LATCHED ||
-            device_info.ptt_state == PTT_STATE_MOMENTARY);
+    return (device_info.ptt_state == PTT_LATCHED ||
+            device_info.ptt_state == PTT_MOMENTARY);
 #else
     return false; // Base station doesn't have PTT
 #endif
@@ -260,22 +265,22 @@ void device_manager_print_status(void)
     uint32_t uptime_sec_remainder = uptime_sec % 60;
 
     ESP_LOGI(TAG, "╔════════════════════════════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║ %s - ID: 0x%02X - Uptime: %02d:%02d                       ║",
+    ESP_LOGI(TAG, "║ %s - ID: 0x%02X - Uptime: %02d:%02d              ║",
              DEVICE_TYPE_STRING, info->device_id, uptime_min, uptime_sec_remainder);
     ESP_LOGI(TAG, "╠════════════════════════════════════════════════════════════╣");
-    ESP_LOGI(TAG, "║ State: %d | WiFi: %s | RSSI: %d dBm                        ║",
+    ESP_LOGI(TAG, "║ State: %d | WiFi: %s | RSSI: %d dBm                  ║",
              info->state, info->wifi_connected ? "CONN" : "DISC", info->rssi);
-    ESP_LOGI(TAG, "║ TX: %6lu | RX: %6lu | Lost: %4lu                       ║",
+    ESP_LOGI(TAG, "║ TX: %6lu | RX: %6lu | Lost: %4lu                    ║",
              (unsigned long)info->packets_sent,
              (unsigned long)info->packets_received,
              (unsigned long)info->packets_lost);
 
 #if DEVICE_TYPE_PACK
-    ESP_LOGI(TAG, "║ PTT: %d | Call: %d | Battery: %.2fV (%d%%)                    ║",
+    ESP_LOGI(TAG, "║ PTT: %d | Call: %d | Battery: %.2fV (%d%%)            ║",
              info->ptt_state, info->call_active,
              info->battery_voltage, info->battery_percent);
 #else
-    ESP_LOGI(TAG, "║ Call: %d | Paired Pack: 0x%02X                             ║",
+    ESP_LOGI(TAG, "║ Call: %d | Paired Pack: 0x%02X                           ║",
              info->call_active, info->paired_device_id);
 #endif
 

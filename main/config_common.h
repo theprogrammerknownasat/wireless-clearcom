@@ -104,9 +104,6 @@
 // TIMING CONSTANTS
 //=============================================================================
 
-// Button debounce time (milliseconds)
-#define BUTTON_DEBOUNCE_MS      50
-
 // Network reconnect delay (milliseconds)
 #define WIFI_RECONNECT_DELAY_MS 2000
 

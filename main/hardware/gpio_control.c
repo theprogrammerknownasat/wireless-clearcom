@@ -2,9 +2,8 @@
  * @file gpio_control.c
  * @brief GPIO Control Implementation
  */
-
-#include "gpio_control.h"
 #include "../config.h"
+#include "gpio_control.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_log.h"
@@ -23,10 +22,12 @@ static bool initialized = false;
 static ptt_callback_t user_ptt_callback = NULL;
 static call_callback_t user_call_callback = NULL;
 
-// Button state
+#if DEVICE_TYPE_PACK
+// Button state (pack only)
 static bool ptt_pressed = false;
 static bool call_pressed = false;
 static int64_t ptt_press_time = 0;
+#endif
 
 // LED state
 static led_state_t led_states[LED_COUNT] = {0};
@@ -40,31 +41,37 @@ static bool led_task_running = false;
 // LED PIN MAPPING
 //=============================================================================
 
+#if DEVICE_TYPE_PACK
 static const gpio_num_t led_pins[LED_COUNT] = {
     [LED_POWER] = LED_POWER_PIN,
-    [LED_PTT] = LED_PTT_PIN,
-    [LED_CALL] = LED_CALL_PIN,
     [LED_STATUS] = LED_STATUS_PIN,
-#if DEVICE_TYPE_PACK && defined(LED_RECEIVE_PIN)
+    [LED_CALL] = LED_CALL_PIN,
+    [LED_PTT] = LED_PTT_PIN,
     [LED_RECEIVE] = LED_RECEIVE_PIN,
-#endif
-#if DEVICE_TYPE_BASE && defined(LED_PTT_MIRROR_PIN)
-    [LED_PTT_MIRROR] = LED_PTT_MIRROR_PIN,
-#endif
 };
 
 static const bool led_enabled[LED_COUNT] = {
     [LED_POWER] = LED_POWER_ENABLE,
-    [LED_PTT] = LED_PTT_ENABLE,
-    [LED_CALL] = LED_CALL_ENABLE,
     [LED_STATUS] = LED_STATUS_ENABLE,
-#if DEVICE_TYPE_PACK
+    [LED_CALL] = LED_CALL_ENABLE,
+    [LED_PTT] = LED_PTT_ENABLE,
     [LED_RECEIVE] = LED_RECEIVE_ENABLE,
-#endif
-#if DEVICE_TYPE_BASE
-    [LED_PTT_MIRROR] = LED_PTT_MIRROR_ENABLE,
-#endif
 };
+#else
+static const gpio_num_t led_pins[LED_COUNT] = {
+    [LED_POWER] = LED_POWER_PIN,
+    [LED_STATUS] = LED_STATUS_PIN,
+    [LED_CALL] = LED_CALL_PIN,
+    [LED_PTT_MIRROR] = LED_PTT_MIRROR_PIN,
+};
+
+static const bool led_enabled[LED_COUNT] = {
+    [LED_POWER] = LED_POWER_ENABLE,
+    [LED_STATUS] = LED_STATUS_ENABLE,
+    [LED_CALL] = LED_CALL_ENABLE,
+    [LED_PTT_MIRROR] = LED_PTT_MIRROR_ENABLE,
+};
+#endif
 
 //=============================================================================
 // PRIVATE FUNCTIONS - LED Control
@@ -123,14 +130,13 @@ static void led_task(void *arg)
 // PRIVATE FUNCTIONS - Button Handling
 //=============================================================================
 
+#if DEVICE_TYPE_PACK
 static void IRAM_ATTR ptt_isr_handler(void *arg)
 {
     // Read button state (assume active low)
     bool pressed = (gpio_get_level(BUTTON_PTT_PIN) == 0);
 
-    // Notify main task via callback (don't do heavy work in ISR)
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    // Store state for polling
+    // Store state for polling (ISR should be fast)
     ptt_pressed = pressed;
 }
 
@@ -201,6 +207,7 @@ static void button_monitor_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(10));  // 10ms polling
     }
 }
+#endif // DEVICE_TYPE_PACK
 
 //=============================================================================
 // PUBLIC FUNCTIONS
@@ -292,12 +299,20 @@ void gpio_control_set_brightness(uint8_t brightness)
 
 bool gpio_control_is_ptt_pressed(void)
 {
+#if DEVICE_TYPE_PACK
     return ptt_pressed;
+#else
+    return false;
+#endif
 }
 
 bool gpio_control_is_call_pressed(void)
 {
+#if DEVICE_TYPE_PACK
     return call_pressed;
+#else
+    return false;
+#endif
 }
 
 void gpio_control_deinit(void)

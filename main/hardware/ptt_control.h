@@ -1,5 +1,5 @@
 /**
-* @file ptt_control.h
+ * @file ptt_control.h
  * @brief PTT State Machine (RS-701 Compatible)
  *
  * Implements PTT button behavior matching ClearCom RS-701:
@@ -39,6 +39,9 @@ typedef void (*ptt_state_callback_t)(ptt_state_t state, bool transmitting);
 // PUBLIC FUNCTIONS
 //=============================================================================
 
+#if DEVICE_TYPE_PACK
+// Belt pack - real PTT implementation
+
 /**
  * @brief Initialize PTT control
  * @param callback Callback for PTT state changes
@@ -64,5 +67,28 @@ ptt_state_t ptt_control_get_state(void);
  * @return true if transmitting (latched or momentary)
  */
 bool ptt_control_is_transmitting(void);
+
+#else
+// Base station - inline stubs (no PTT buttons)
+
+static inline esp_err_t ptt_control_init(ptt_state_callback_t callback) {
+    (void)callback;
+    return ESP_OK;
+}
+
+static inline void ptt_control_button_event(bool pressed, uint32_t hold_time_ms) {
+    (void)pressed;
+    (void)hold_time_ms;
+}
+
+static inline ptt_state_t ptt_control_get_state(void) {
+    return PTT_IDLE;
+}
+
+static inline bool ptt_control_is_transmitting(void) {
+    return false;
+}
+
+#endif // DEVICE_TYPE_PACK
 
 #endif // PTT_CONTROL_H

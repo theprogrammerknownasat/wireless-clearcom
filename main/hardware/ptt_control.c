@@ -3,8 +3,12 @@
  * @brief PTT State Machine Implementation
  */
 
-#include "ptt_control.h"
 #include "../config.h"
+#include "ptt_control.h"
+
+
+#if DEVICE_TYPE_PACK
+
 #include "esp_log.h"
 
 static const char *TAG = "PTT";
@@ -98,3 +102,4 @@ bool ptt_control_is_transmitting(void)
 {
     return (current_state == PTT_LATCHED || current_state == PTT_MOMENTARY);
 }
+#endif // DEVICE_TYPE_PACK

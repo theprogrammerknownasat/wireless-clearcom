@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "../hardware/ptt_control.h"
 
 //=============================================================================
 // DEVICE STATE DEFINITIONS
@@ -29,12 +30,6 @@ typedef enum {
 //=============================================================================
 // PTT STATE DEFINITIONS
 //=============================================================================
-
-typedef enum {
-    PTT_STATE_IDLE,              // Mic off, not transmitting
-    PTT_STATE_LATCHED,           // Mic on (toggled), transmitting
-    PTT_STATE_MOMENTARY          // Mic on (held), transmitting
-} ptt_state_t;
 
 //=============================================================================
 // DEVICE INFO STRUCTURE

@@ -52,6 +52,9 @@
 // Typical: 200ms
 #define PTT_HOLD_THRESHOLD_MS   200
 
+// Button debounce time (milliseconds)
+#define BUTTON_DEBOUNCE_MS      20
+
 //=============================================================================
 // GPIO PIN ASSIGNMENTS (Belt Pack Specific)
 //=============================================================================
