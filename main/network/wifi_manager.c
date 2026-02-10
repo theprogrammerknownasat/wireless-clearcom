@@ -4,15 +4,13 @@
  */
 
 #include "wifi_manager.h"
-
-#include <esp_mac.h>
-
 #include "../config.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_log.h"
 #include <string.h>
+#include <rom/ets_sys.h>
 
 static const char *TAG = "WIFI_MGR";
 
@@ -191,6 +189,10 @@ esp_err_t wifi_manager_start(void)
             .authmode = WIFI_AUTH_WPA2_PSK,
             .ssid_hidden = WIFI_HIDDEN_SSID,
             .beacon_interval = 100,
+            .pmf_cfg = {
+                .capable = false,  // Disable PMF
+                .required = false
+            },
         },
     };
 
@@ -209,7 +211,7 @@ esp_err_t wifi_manager_start(void)
             .password = WIFI_PASSWORD,
             .threshold.authmode = WIFI_AUTH_WPA2_PSK,
             .pmf_cfg = {
-                .capable = true,
+                .capable = false,  // Disable PMF to match AP
                 .required = false
             },
         },

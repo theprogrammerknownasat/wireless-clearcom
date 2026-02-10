@@ -199,6 +199,14 @@ void device_manager_update_network_stats(uint32_t packets_sent,
     device_info.rssi = rssi;
 }
 
+void device_manager_update_wifi(bool connected, int8_t rssi)
+{
+    if (!initialized) return;
+
+    device_info.wifi_connected = connected;
+    device_info.rssi = rssi;
+}
+
 void device_manager_update_battery(float voltage)
 {
     if (!initialized) return;

@@ -43,11 +43,13 @@ static void wifi_event_handler(wifi_event_type_t event, void *data)
         case WIFI_EVENT_CONNECTED:
             ESP_LOGI(TAG, "WiFi connected");
             device_manager_set_state(DEVICE_STATE_CONNECTED);
+            device_manager_update_wifi(true, 0);  // RSSI will be polled by monitor task
             break;
 
         case WIFI_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "WiFi disconnected - reconnecting...");
             device_manager_set_state(DEVICE_STATE_DISCONNECTED);
+            device_manager_update_wifi(false, 0);
             break;
 
         case WIFI_EVENT_GOT_IP:
@@ -102,6 +104,7 @@ static void ptt_state_handler(ptt_state_t state, bool transmitting)
 #if DEVICE_TYPE_PACK
     gpio_control_set_led(LED_PTT, transmitting ? LED_ON : LED_OFF);
 #else
+    // Base mirrors pack's PTT state on PTT_MIRROR LED
     gpio_control_set_led(LED_PTT_MIRROR, transmitting ? LED_ON : LED_OFF);
 #endif
 
@@ -233,6 +236,12 @@ static void monitor_task(void *arg)
 
         // Print status every 5 seconds
         if (stats_counter % 5 == 0) {
+            // Update WiFi status with current RSSI
+            if (wifi_manager_is_connected()) {
+                int8_t rssi = wifi_manager_get_rssi();
+                device_manager_update_wifi(true, rssi);
+            }
+
             device_manager_print_status();
 
             // Print network stats

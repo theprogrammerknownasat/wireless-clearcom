@@ -11,6 +11,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+
+// Include PTT control for state types
 #include "../hardware/ptt_control.h"
 
 //=============================================================================
@@ -116,6 +118,13 @@ bool device_manager_is_transmitting(void);
  * @param active true if call button pressed, false otherwise
  */
 void device_manager_set_call_active(bool active);
+
+/**
+ * @brief Update WiFi connection status and RSSI
+ * @param connected true if connected, false otherwise
+ * @param rssi Signal strength in dBm
+ */
+void device_manager_update_wifi(bool connected, int8_t rssi);
 
 /**
  * @brief Check if call is active
