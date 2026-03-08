@@ -81,28 +81,30 @@
 //=============================================================================
 // GPIO PIN ASSIGNMENTS (ESP32-S3)
 //=============================================================================
-// NOTE: These will be finalized once hardware schematic is complete
 
-// I2S (Audio Codec)
-#define I2S_BCLK_PIN            GPIO_NUM_4
-#define I2S_WS_PIN              GPIO_NUM_5
-#define I2S_DOUT_PIN            GPIO_NUM_6   // ESP32 -> WM8960
-#define I2S_DIN_PIN             GPIO_NUM_7   // WM8960 -> ESP32
+// I2S (Audio Codec Interface) - MCLK is device-specific
+#define I2S_BCLK_PIN            GPIO_NUM_7   // Bit clock
+#define I2S_WS_PIN              GPIO_NUM_8   // Word select (LRCK)
+#define I2S_DOUT_PIN            GPIO_NUM_9   // ESP32 -> WM8960
+#define I2S_DIN_PIN             GPIO_NUM_6   // WM8960 -> ESP32
 
 // I2C (Audio Codec Control)
-#define I2C_SDA_PIN             GPIO_NUM_8
-#define I2C_SCL_PIN             GPIO_NUM_9
+#define I2C_SDA_PIN             GPIO_NUM_4   // I2C data
+#define I2C_SCL_PIN             GPIO_NUM_5   // I2C clock
 
 // LEDs (all devices)
 #define LED_POWER_PIN           GPIO_NUM_10
 #define LED_CALL_PIN            GPIO_NUM_11
 #define LED_STATUS_PIN          GPIO_NUM_12
 
-// Device-specific pins defined in config_base.h and config_pack.h
+// Device-specific pins (MCLK, buttons, etc) defined in config_base.h and config_pack.h
 
 //=============================================================================
 // TIMING CONSTANTS
 //=============================================================================
+
+// Button debounce time (milliseconds)
+#define BUTTON_DEBOUNCE_MS      50
 
 // Network reconnect delay (milliseconds)
 #define WIFI_RECONNECT_DELAY_MS 2000

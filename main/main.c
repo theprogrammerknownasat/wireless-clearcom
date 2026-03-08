@@ -30,6 +30,7 @@
 #include "hardware/ptt_control.h"
 #include "hardware/battery.h"
 #include "hardware/clearcom_line.h"
+#include "test_mode_base.h"
 
 static const char *TAG = "MAIN";
 
@@ -444,17 +445,7 @@ void app_main(void)
     // Set log level
     esp_log_level_set("*", LOG_LEVEL);
 
-    // Run self-test
-    ESP_LOGI(TAG, "Running system self-test...");
-    diagnostics_result_t diag_results;
-    ret = diagnostics_run_self_test(&diag_results);
-
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Self-test failed!");
-        // System will halt in diagnostics if critical failure
-    }
-
-    // Initialize all subsystems
+    // Initialize all subsystems FIRST
     ESP_LOGI(TAG, "Initializing subsystems...");
     ret = init_subsystems();
 
@@ -463,6 +454,16 @@ void app_main(void)
         while(1) {
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
+    }
+
+    // NOW run comprehensive self-test (all subsystems are initialized)
+    ESP_LOGI(TAG, "Running system self-test...");
+    diagnostics_result_t diag_results;
+    ret = diagnostics_run_self_test(&diag_results);
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Self-test failed!");
+        // System will halt in diagnostics if critical failure
     }
 
     // Wait for WiFi connection
@@ -494,6 +495,14 @@ void app_main(void)
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  System Ready");
     ESP_LOGI(TAG, "========================================");
+
+#if DEVICE_TYPE_BASE && TEST_MODE_ENABLE
+    // Start test mode for party line testing
+    ESP_LOGI(TAG, "");
+    ESP_LOGI(TAG, "⚠️  TEST MODE ENABLED - Starting in 2 seconds...");
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    test_mode_start();
+#endif
 
     device_manager_set_state(DEVICE_STATE_CONNECTED);
 }

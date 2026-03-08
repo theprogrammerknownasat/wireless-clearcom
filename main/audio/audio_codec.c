@@ -39,6 +39,7 @@ static const char *TAG = "CODEC";
 //=============================================================================
 
 static bool initialized = false;
+static bool using_simulation = SIMULATE_HARDWARE;  // Track if we're simulating
 static codec_input_t current_input = CODEC_INPUT_MIC;
 static codec_output_t current_output = CODEC_OUTPUT_SPEAKER;
 static uint8_t input_gain = 20;
@@ -46,11 +47,11 @@ static uint8_t output_volume = 20;
 static bool sidetone_enabled = false;
 static float sidetone_level = 0.3f;
 
-#if SIMULATE_HARDWARE
-// Simulation state
+// Simulation state (used for simulation mode OR fallback if hardware fails)
 static float sim_phase = 0.0f;
 static uint32_t sim_sample_counter = 0;
-#else
+
+#if !SIMULATE_HARDWARE
 // Real hardware handles
 static i2s_chan_handle_t tx_handle = NULL;
 static i2s_chan_handle_t rx_handle = NULL;
@@ -117,25 +118,31 @@ static esp_err_t wm8960_configure(void)
 {
     ESP_LOGI(TAG, "Configuring WM8960 registers...");
 
+    esp_err_t ret;
+
     // Reset WM8960
-    wm8960_write_reg(WM8960_REG_RESET, 0x0000);
+    ret = wm8960_write_reg(WM8960_REG_RESET, 0x0000);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to reset WM8960 - hardware not connected?");
+        return ESP_FAIL;
+    }
     vTaskDelay(pdMS_TO_TICKS(100));
 
     // Power up
-    wm8960_write_reg(WM8960_REG_POWER1, 0x00FF);
-    wm8960_write_reg(WM8960_REG_POWER2, 0x01FF);
+    if (wm8960_write_reg(WM8960_REG_POWER1, 0x00FF) != ESP_OK) return ESP_FAIL;
+    if (wm8960_write_reg(WM8960_REG_POWER2, 0x01FF) != ESP_OK) return ESP_FAIL;
 
     // Configure I2S interface
-    wm8960_write_reg(WM8960_REG_IFACE1, 0x0002); // 16-bit, I2S format
+    if (wm8960_write_reg(WM8960_REG_IFACE1, 0x0002) != ESP_OK) return ESP_FAIL;
 
     // Set sample rate
-    wm8960_write_reg(WM8960_REG_CLOCK1, 0x0000); // Use MCLK
+    if (wm8960_write_reg(WM8960_REG_CLOCK1, 0x0000) != ESP_OK) return ESP_FAIL;
 
     // Set default volumes
-    wm8960_write_reg(WM8960_REG_LINVOL, 0x0117); // Left input volume
-    wm8960_write_reg(WM8960_REG_RINVOL, 0x0117); // Right input volume
-    wm8960_write_reg(WM8960_REG_LOUT1, 0x0179);  // Left output volume
-    wm8960_write_reg(WM8960_REG_ROUT1, 0x0179);  // Right output volume
+    if (wm8960_write_reg(WM8960_REG_LINVOL, 0x0117) != ESP_OK) return ESP_FAIL;
+    if (wm8960_write_reg(WM8960_REG_RINVOL, 0x0117) != ESP_OK) return ESP_FAIL;
+    if (wm8960_write_reg(WM8960_REG_LOUT1, 0x0179) != ESP_OK) return ESP_FAIL;
+    if (wm8960_write_reg(WM8960_REG_ROUT1, 0x0179) != ESP_OK) return ESP_FAIL;
 
     ESP_LOGI(TAG, "WM8960 configured successfully");
     return ESP_OK;
@@ -151,12 +158,16 @@ static esp_err_t wm8960_init_i2s(void)
     // Create TX and RX channels
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle));
 
-    // Configure I2S standard mode
+    // Configure I2S standard mode with MCLK output
     i2s_std_config_t std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLE_RATE_HZ),
+        .clk_cfg = {
+            .sample_rate_hz = SAMPLE_RATE_HZ,
+            .clk_src = I2S_CLK_SRC_DEFAULT,         // Use default PLL (APLL not available in 5.5.2)
+            .mclk_multiple = I2S_MCLK_MULTIPLE_256, // MCLK = 256 × sample_rate = 4.096 MHz
+        },
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
         .gpio_cfg = {
-            .mclk = I2S_GPIO_UNUSED,
+            .mclk = I2S_MCLK_PIN,  // MCLK output on GPIO 2
             .bclk = I2S_BCLK_PIN,
             .ws = I2S_WS_PIN,
             .dout = I2S_DOUT_PIN,
@@ -176,7 +187,8 @@ static esp_err_t wm8960_init_i2s(void)
     ESP_ERROR_CHECK(i2s_channel_enable(tx_handle));
     ESP_ERROR_CHECK(i2s_channel_enable(rx_handle));
 
-    ESP_LOGI(TAG, "I2S initialized successfully");
+    ESP_LOGI(TAG, "I2S initialized with MCLK=%.3f MHz on GPIO %d",
+             (float)(SAMPLE_RATE_HZ * 256) / 1000000.0f, I2S_MCLK_PIN);
     return ESP_OK;
 }
 
@@ -212,24 +224,41 @@ esp_err_t audio_codec_init(void)
     // Initialize I2C
     esp_err_t ret = wm8960_init_i2c();
     if (ret != ESP_OK) {
-        return ret;
+        ESP_LOGE(TAG, "I2C initialization failed - falling back to simulation");
+        goto fallback_simulation;
     }
 
     // Configure WM8960 registers
     ret = wm8960_configure();
     if (ret != ESP_OK) {
-        return ret;
+        ESP_LOGE(TAG, "WM8960 not responding - hardware not connected?");
+        ESP_LOGE(TAG, "Falling back to simulation mode for testing");
+        i2c_driver_delete(I2C_NUM_0);  // Clean up I2C
+        goto fallback_simulation;
     }
 
     // Initialize I2S
     ret = wm8960_init_i2s();
     if (ret != ESP_OK) {
-        return ret;
+        ESP_LOGE(TAG, "I2S initialization failed - falling back to simulation");
+        i2c_driver_delete(I2C_NUM_0);
+        goto fallback_simulation;
     }
 
     initialized = true;
     ESP_LOGI(TAG, "WM8960 initialization complete");
     return ESP_OK;
+
+fallback_simulation:
+    ESP_LOGW(TAG, "========================================");
+    ESP_LOGW(TAG, "HARDWARE INIT FAILED - USING SIMULATION");
+    ESP_LOGW(TAG, "System will continue with simulated audio");
+    ESP_LOGW(TAG, "========================================");
+    sim_phase = 0.0f;
+    sim_sample_counter = 0;
+    using_simulation = true;  // Mark as using simulation
+    initialized = true;
+    return ESP_OK;  // Return OK so system continues
 #endif
 }
 
@@ -302,22 +331,27 @@ esp_err_t audio_codec_read(int16_t *buffer, size_t sample_count)
     }
 
 #if SIMULATE_HARDWARE
-    // Generate simulated audio:
-    // 440Hz sine wave + low-level noise for testing
+    if (using_simulation) {
+#else
+    if (using_simulation) {  // Runtime fallback
+#endif
+        // Generate simulated audio:
+        // 440Hz sine wave + low-level noise for testing
 
-    audio_tones_generate_sine(buffer, sample_count, 440.0f, 0.3f, &sim_phase);
+        audio_tones_generate_sine(buffer, sample_count, 440.0f, 0.3f, &sim_phase);
 
-    // Add some noise to make it more realistic
-    for (size_t i = 0; i < sample_count; i++) {
-        int16_t noise = (rand() % 200) - 100;  // ±100 noise
-        buffer[i] += noise;
+        // Add some noise to make it more realistic
+        for (size_t i = 0; i < sample_count; i++) {
+            int16_t noise = (rand() % 200) - 100;  // ±100 noise
+            buffer[i] += noise;
+        }
+
+        sim_sample_counter += sample_count;
+
+        return ESP_OK;
     }
 
-    sim_sample_counter += sample_count;
-
-    return ESP_OK;
-
-#else
+#if !SIMULATE_HARDWARE
     // Read from WM8960 via I2S
     size_t bytes_read = 0;
     size_t bytes_to_read = sample_count * sizeof(int16_t);
@@ -329,9 +363,9 @@ esp_err_t audio_codec_read(int16_t *buffer, size_t sample_count)
         ESP_LOGE(TAG, "I2S read failed: %d", ret);
         return ret;
     }
+#endif
 
     return ESP_OK;
-#endif
 }
 
 esp_err_t audio_codec_write(const int16_t *buffer, size_t sample_count)
@@ -341,14 +375,19 @@ esp_err_t audio_codec_write(const int16_t *buffer, size_t sample_count)
     }
 
 #if SIMULATE_HARDWARE
-    // In simulation mode, just pretend to write
-    // Could log first/last samples for debugging
-    ESP_LOGD(TAG, "SIM write: %d samples, first=%d, last=%d",
-             sample_count, buffer[0], buffer[sample_count-1]);
-
-    return ESP_OK;
-
+    if (using_simulation) {
 #else
+    if (using_simulation) {  // Runtime fallback
+#endif
+        // In simulation mode, just pretend to write
+        // Could log first/last samples for debugging
+        ESP_LOGD(TAG, "SIM write: %d samples, first=%d, last=%d",
+                 sample_count, buffer[0], buffer[sample_count-1]);
+
+        return ESP_OK;
+    }
+
+#if !SIMULATE_HARDWARE
     // Write to WM8960 via I2S
     size_t bytes_written = 0;
     size_t bytes_to_write = sample_count * sizeof(int16_t);
@@ -360,9 +399,9 @@ esp_err_t audio_codec_write(const int16_t *buffer, size_t sample_count)
         ESP_LOGE(TAG, "I2S write failed: %d", ret);
         return ret;
     }
+#endif
 
     return ESP_OK;
-#endif
 }
 
 esp_err_t audio_codec_set_sidetone(bool enable, float level)

@@ -17,7 +17,7 @@
 // SIMULATION MODE (Set to 0 when WM8960 hardware is connected)
 //=============================================================================
 
-#define SIMULATE_HARDWARE   1    // 1 = Generate fake audio, 0 = Real WM8960
+#define SIMULATE_HARDWARE   0    // 1 = Generate fake audio, 0 = Real WM8960
 
 //=============================================================================
 // CODEC CONFIGURATION

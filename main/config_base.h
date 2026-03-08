@@ -8,7 +8,6 @@
 #ifndef CONFIG_BASE_H
 #define CONFIG_BASE_H
 
-
 //=============================================================================
 // DEVICE IDENTIFICATION
 //=============================================================================
@@ -50,8 +49,20 @@
 // GPIO PIN ASSIGNMENTS (Base Station Specific)
 //=============================================================================
 
+// I2S MCLK (base uses GPIO 2)
+#define I2S_MCLK_PIN            GPIO_NUM_2
+
 // PTT Mirror LED (shows connected pack's PTT state)
 #define LED_PTT_MIRROR_PIN      GPIO_NUM_13
+
+// Call detection from party line (ADC input)
+// Reads scaled-down call voltage to detect incoming calls
+#define CALL_RX_PIN             GPIO_NUM_1   // ADC1_CH0
+#define CALL_RX_ADC_CHANNEL     ADC_CHANNEL_0
+
+// Call voltage thresholds (adjust based on your voltage divider)
+#define CALL_VOLTAGE_THRESHOLD  1.5f  // Volts - above this = call detected
+#define CALL_DEBOUNCE_MS        50    // Milliseconds - debounce time
 
 // Optional passthrough detect (if 3-pin XLR female is used)
 // Set to -1 if not used
@@ -63,9 +74,9 @@
 
 // Enable/disable individual LEDs (0=off, 1=on)
 #define LED_POWER_ENABLE        1    // Power indicator
-#define LED_PTT_MIRROR_ENABLE   1    // Mirror pack's PTT state
-#define LED_CALL_ENABLE         1    // Call signal indicator
 #define LED_STATUS_ENABLE       1    // Signal quality indicator
+#define LED_CALL_ENABLE         1    // Call signal indicator
+#define LED_PTT_MIRROR_ENABLE   1    // Mirror pack's PTT state
 #define LED_RECEIVE_ENABLE      0    // Optional: RX indicator
 
 // LED brightness (0-100 percent)
@@ -88,6 +99,10 @@
 //=============================================================================
 // DIAGNOSTICS
 //=============================================================================
+
+// Enable test mode (generates 440Hz tone, tests party line output)
+// Set to 1 for testing, 0 for production
+#define TEST_MODE_ENABLE        1
 
 // Enable self-test on boot
 #define SELFTEST_ENABLE         1

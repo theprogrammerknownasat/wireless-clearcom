@@ -59,17 +59,24 @@
 // GPIO PIN ASSIGNMENTS (Belt Pack Specific)
 //=============================================================================
 
+// I2S MCLK (pack uses GPIO 3, different from base!)
+#define I2S_MCLK_PIN            GPIO_NUM_3
+
 // Buttons
-#define BUTTON_PTT_PIN          GPIO_NUM_13
-#define BUTTON_CALL_PIN         GPIO_NUM_14
+#define BUTTON_PTT_PIN          GPIO_NUM_15   // B_PTT on schematic
+#define BUTTON_CALL_PIN         GPIO_NUM_16   // B_CALL on schematic
 
 // LEDs (in addition to common LEDs in config_common.h)
-#define LED_PTT_PIN             GPIO_NUM_15
-#define LED_RECEIVE_PIN         GPIO_NUM_16   // Optional
+#define LED_PTT_PIN             GPIO_NUM_13   // LED_PTT on schematic
+#define LED_RECEIVE_PIN         GPIO_NUM_14   // Optional - unused
+
+// Volume control (potentiometer via ADC)
+#define VOLUME_POT_PIN          GPIO_NUM_2    // VOLUME on schematic (ADC1_CH1)
+#define VOLUME_ADC_CHANNEL      ADC_CHANNEL_1
 
 // Battery monitoring (ADC input)
+#define BATTERY_ADC_PIN         GPIO_NUM_1    // BATT_CHARGE on schematic (ADC1_CH0)
 #define BATTERY_ADC_CHANNEL     ADC_CHANNEL_0
-#define BATTERY_ADC_PIN         GPIO_NUM_1
 
 //=============================================================================
 // LED CONFIGURATION (Belt Pack)
