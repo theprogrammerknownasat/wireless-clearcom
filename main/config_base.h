@@ -79,6 +79,13 @@
 #define LED_PTT_MIRROR_ENABLE   1    // Mirror pack's PTT state
 #define LED_RECEIVE_ENABLE      0    // Optional: RX indicator
 
+// LED polarity (set to 1 if LED is inverted/active-low)
+#define LED_POWER_INVERT        0
+#define LED_STATUS_INVERT       0
+#define LED_CALL_INVERT         0
+#define LED_PTT_MIRROR_INVERT   0    // Hardware is correct (was sync issue)
+#define LED_RECEIVE_INVERT      0
+
 // LED brightness (0-100 percent)
 #define LED_BRIGHTNESS_PCT      80
 

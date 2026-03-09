@@ -2,15 +2,18 @@
  * @file gpio_control.c
  * @brief GPIO Control Implementation
  */
+
 #include "../config.h"
 #include "gpio_control.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_log.h"
+#include "esp_sleep.h"  // For GPIO sleep hold configuration
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
 #include "esp_timer.h"
+#include "rom/ets_sys.h"  // For ets_delay_us in ISR
 
 static const char *TAG = "GPIO";
 
@@ -57,6 +60,14 @@ static const bool led_enabled[LED_COUNT] = {
     [LED_PTT] = LED_PTT_ENABLE,
     [LED_RECEIVE] = LED_RECEIVE_ENABLE,
 };
+
+static const bool led_inverted[LED_COUNT] = {
+    [LED_POWER] = LED_POWER_INVERT,
+    [LED_STATUS] = LED_STATUS_INVERT,
+    [LED_CALL] = LED_CALL_INVERT,
+    [LED_PTT] = LED_PTT_INVERT,
+    [LED_RECEIVE] = LED_RECEIVE_INVERT,
+};
 #else
 static const gpio_num_t led_pins[LED_COUNT] = {
     [LED_POWER] = LED_POWER_PIN,
@@ -71,6 +82,13 @@ static const bool led_enabled[LED_COUNT] = {
     [LED_CALL] = LED_CALL_ENABLE,
     [LED_PTT_MIRROR] = LED_PTT_MIRROR_ENABLE,
 };
+
+static const bool led_inverted[LED_COUNT] = {
+    [LED_POWER] = LED_POWER_INVERT,
+    [LED_STATUS] = LED_STATUS_INVERT,
+    [LED_CALL] = LED_CALL_INVERT,
+    [LED_PTT_MIRROR] = LED_PTT_MIRROR_INVERT,
+};
 #endif
 
 //=============================================================================
@@ -83,7 +101,12 @@ static void led_set_physical(led_id_t led, bool on)
         return;
     }
 
-    // Simple on/off for now (could add PWM brightness later)
+    // Apply inversion if LED is wired backwards
+    if (led_inverted[led]) {
+        on = !on;
+    }
+
+    // Set GPIO level (1=on, 0=off for normal LEDs)
     gpio_set_level(led_pins[led], on ? 1 : 0);
 }
 
@@ -133,18 +156,36 @@ static void led_task(void *arg)
 #if DEVICE_TYPE_PACK
 static void IRAM_ATTR ptt_isr_handler(void *arg)
 {
-    // Read button state (assume active low)
-    bool pressed = (gpio_get_level(BUTTON_PTT_PIN) == 0);
+    // Read current state
+    int level = gpio_get_level(BUTTON_PTT_PIN);
 
-    // Store state for polling (ISR should be fast)
-    ptt_pressed = pressed;
+    // Simple noise filter: verify state is stable
+    // Re-read after a tiny delay to confirm it's not a spike
+    ets_delay_us(100);  // 100 microsecond delay
+    int level_confirm = gpio_get_level(BUTTON_PTT_PIN);
+
+    // Only update if both reads agree (noise rejection)
+    if (level == level_confirm) {
+        bool pressed = (level == 0);  // Active low
+        ptt_pressed = pressed;
+    }
+    // If reads disagree, ignore this interrupt (was noise)
 }
 
 static void IRAM_ATTR call_isr_handler(void *arg)
 {
-    // Read button state (assume active low)
-    bool pressed = (gpio_get_level(BUTTON_CALL_PIN) == 0);
-    call_pressed = pressed;
+    // Read current state
+    int level = gpio_get_level(BUTTON_CALL_PIN);
+
+    // Simple noise filter: verify state is stable
+    ets_delay_us(100);  // 100 microsecond delay
+    int level_confirm = gpio_get_level(BUTTON_CALL_PIN);
+
+    // Only update if both reads agree
+    if (level == level_confirm) {
+        bool pressed = (level == 0);  // Active low
+        call_pressed = pressed;
+    }
 }
 
 static void button_monitor_task(void *arg)
@@ -166,13 +207,15 @@ static void button_monitor_task(void *arg)
                 if (current_ptt) {
                     // Button pressed
                     ptt_press_time = esp_timer_get_time() / 1000;  // ms
+                    ESP_LOGI(TAG, "🔴 PTT button PRESSED");
                     if (user_ptt_callback) {
                         user_ptt_callback(true, 0);
                     }
                 } else {
                     // Button released
+                    int64_t hold_time = (esp_timer_get_time() / 1000) - ptt_press_time;
+                    ESP_LOGI(TAG, "⚪ PTT button RELEASED (held %lld ms)", hold_time);
                     if (user_ptt_callback) {
-                        int64_t hold_time = (esp_timer_get_time() / 1000) - ptt_press_time;
                         user_ptt_callback(false, (uint32_t)hold_time);
                     }
                 }
@@ -197,6 +240,7 @@ static void button_monitor_task(void *arg)
             current_call = call_pressed;
 
             if (current_call != last_call) {  // Confirmed change
+                ESP_LOGI(TAG, "📞 CALL button %s", current_call ? "PRESSED" : "RELEASED");
                 if (user_call_callback) {
                     user_call_callback(current_call);
                 }
@@ -254,15 +298,29 @@ esp_err_t gpio_control_init(ptt_callback_t ptt_cb, call_callback_t call_cb)
     // PTT button
     btn_conf.pin_bit_mask = (1ULL << BUTTON_PTT_PIN);
     gpio_config(&btn_conf);
+
+    // CRITICAL: Hold pull-up during sleep to prevent ghost activations
+    gpio_hold_en(BUTTON_PTT_PIN);
+    gpio_sleep_set_direction(BUTTON_PTT_PIN, GPIO_MODE_INPUT);
+    gpio_sleep_set_pull_mode(BUTTON_PTT_PIN, GPIO_PULLUP_ONLY);
+
     gpio_install_isr_service(0);
     gpio_isr_handler_add(BUTTON_PTT_PIN, ptt_isr_handler, NULL);
-    ESP_LOGI(TAG, "PTT button configured on GPIO %d", BUTTON_PTT_PIN);
+    int ptt_level = gpio_get_level(BUTTON_PTT_PIN);
+    ESP_LOGI(TAG, "PTT button configured on GPIO %d (current level: %d)", BUTTON_PTT_PIN, ptt_level);
 
     // Call button
     btn_conf.pin_bit_mask = (1ULL << BUTTON_CALL_PIN);
     gpio_config(&btn_conf);
+
+    // CRITICAL: Hold pull-up during sleep to prevent ghost activations
+    gpio_hold_en(BUTTON_CALL_PIN);
+    gpio_sleep_set_direction(BUTTON_CALL_PIN, GPIO_MODE_INPUT);
+    gpio_sleep_set_pull_mode(BUTTON_CALL_PIN, GPIO_PULLUP_ONLY);
+
     gpio_isr_handler_add(BUTTON_CALL_PIN, call_isr_handler, NULL);
-    ESP_LOGI(TAG, "Call button configured on GPIO %d", BUTTON_CALL_PIN);
+    int call_level = gpio_get_level(BUTTON_CALL_PIN);
+    ESP_LOGI(TAG, "Call button configured on GPIO %d (current level: %d)", BUTTON_CALL_PIN, call_level);
 
     // Start button monitor task
     xTaskCreate(button_monitor_task, "btn_monitor", 4096, NULL, 5, NULL);

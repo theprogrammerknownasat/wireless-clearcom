@@ -81,6 +81,11 @@ static void udp_rx_handler(const uint8_t *opus_data, uint16_t opus_size,
     // Update call state based on remote signal
     call_module_remote_signal(remote_call_active);
 
+#if DEVICE_TYPE_BASE
+    // Mirror pack's PTT state on base LED
+    gpio_control_set_led(LED_PTT_MIRROR, remote_ptt_active ? LED_ON : LED_OFF);
+#endif
+
     // Decode and play audio
     int16_t pcm_output[SAMPLES_PER_FRAME];
     int decoded = audio_opus_decode(opus_data, opus_size, pcm_output, SAMPLES_PER_FRAME, 0);
@@ -104,6 +109,16 @@ static void ptt_state_handler(ptt_state_t state, bool transmitting)
     // Update LED
 #if DEVICE_TYPE_PACK
     gpio_control_set_led(LED_PTT, transmitting ? LED_ON : LED_OFF);
+
+    // CRITICAL: Send immediate status packet when PTT turns OFF
+    // Otherwise base LED stays on until next packet (which never comes!)
+    if (!transmitting) {
+        // Send a silent packet with PTT=false flag
+        uint8_t silent_packet[60] = {0};  // Empty Opus packet (silence)
+        bool call_active = call_module_is_calling();
+        udp_transport_send(silent_packet, 60, false, call_active);
+        ESP_LOGI(TAG, "Sent PTT-OFF notification packet");
+    }
 #else
     // Base mirrors pack's PTT state on PTT_MIRROR LED
     gpio_control_set_led(LED_PTT_MIRROR, transmitting ? LED_ON : LED_OFF);
@@ -128,11 +143,11 @@ static void call_state_handler(call_state_t state, bool is_calling)
 
     // Update call LED
     if (state == CALL_OUTGOING) {
-        gpio_control_set_led(LED_CALL, LED_BLINK_SLOW);
+        gpio_control_set_led(LED_CALL, LED_BLINK_SLOW);  // Blink while calling out
     } else if (state == CALL_INCOMING) {
-        gpio_control_set_led(LED_CALL, LED_BLINK_FAST);
+        gpio_control_set_led(LED_CALL, LED_ON);  // Solid ON for incoming call
     } else if (state == CALL_ACKNOWLEDGED) {
-        gpio_control_set_led(LED_CALL, LED_ON);
+        gpio_control_set_led(LED_CALL, LED_ON);  // Solid ON when acknowledged
     } else {
         gpio_control_set_led(LED_CALL, LED_OFF);
     }
@@ -230,10 +245,36 @@ static void monitor_task(void *arg)
     TickType_t last_wake = xTaskGetTickCount();
     uint32_t stats_counter = 0;
 
+#if DEVICE_TYPE_PACK
+    // PTT stuck detection
+    static uint32_t ptt_transmit_time = 0;
+    const uint32_t PTT_TIMEOUT_SECONDS = 300;  // 5 minutes = likely stuck
+#endif
+
     while (1) {
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(1000));  // 1Hz
 
         stats_counter++;
+
+#if DEVICE_TYPE_PACK
+        // Monitor PTT for stuck state
+        if (ptt_control_is_transmitting()) {
+            ptt_transmit_time++;
+
+            // Warn if transmitting for a very long time
+            if (ptt_transmit_time == 60) {  // 1 minute
+                ESP_LOGW(TAG, "⚠️  PTT has been active for 1 minute");
+            } else if (ptt_transmit_time == 180) {  // 3 minutes
+                ESP_LOGW(TAG, "⚠️  PTT has been active for 3 minutes - possible stuck state");
+            } else if (ptt_transmit_time >= PTT_TIMEOUT_SECONDS) {
+                ESP_LOGE(TAG, "🔴 PTT STUCK! Forcing reset to IDLE");
+                ptt_control_force_idle();
+                ptt_transmit_time = 0;
+            }
+        } else {
+            ptt_transmit_time = 0;  // Reset counter when not transmitting
+        }
+#endif
 
         // Print status every 5 seconds
         if (stats_counter % 5 == 0) {

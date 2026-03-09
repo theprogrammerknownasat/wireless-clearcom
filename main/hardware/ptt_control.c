@@ -6,7 +6,6 @@
 #include "../config.h"
 #include "ptt_control.h"
 
-
 #if DEVICE_TYPE_PACK
 
 #include "esp_log.h"
@@ -20,6 +19,7 @@ static const char *TAG = "PTT";
 static ptt_state_t current_state = PTT_IDLE;
 static ptt_state_callback_t user_callback = NULL;
 static bool button_currently_pressed = false;
+static bool just_latched = false;  // Track if we just entered latch (vs been latched)
 
 //=============================================================================
 // PRIVATE FUNCTIONS
@@ -65,31 +65,73 @@ void ptt_control_button_event(bool pressed, uint32_t hold_time_ms)
 {
     button_currently_pressed = pressed;
 
+    // SAFETY CHECK: Log unexpected state transitions for debugging
+    if (!pressed && current_state == PTT_IDLE) {
+        // Got release event while already idle - shouldn't happen
+        ESP_LOGW(TAG, "⚠️  PTT release event while IDLE (ghost activation?)");
+        return;  // Ignore spurious release
+    }
+
     if (pressed) {
-        // Button pressed
+        // ===== BUTTON PRESSED =====
+
+        ESP_LOGI(TAG, "PTT event: PRESS (state=%s, just_latched=%d)",
+                 current_state == PTT_IDLE ? "IDLE" :
+                 current_state == PTT_LATCHED ? "LATCHED" : "MOMENTARY",
+                 just_latched);
+
         if (current_state == PTT_IDLE) {
-            // From idle: enter latched on rising edge
+            // First press: Enter LATCHED mode
             set_state(PTT_LATCHED);
+            just_latched = true;  // Mark that we just entered latch mode
         }
         else if (current_state == PTT_LATCHED) {
-            // From latched: check if held long enough for momentary
-            if (hold_time_ms >= PTT_HOLD_THRESHOLD_MS) {
-                set_state(PTT_MOMENTARY);
-            }
+            // Already latched: second press
+            // Will unlatch on quick release, or become momentary if held
+            just_latched = false;  // This is the unlatch press
         }
-        // If already in momentary, stay in momentary
+        else if (current_state == PTT_MOMENTARY) {
+            // Already in momentary, stay there
+        }
     }
     else {
-        // Button released
-        if (current_state == PTT_MOMENTARY) {
-            // Release from momentary: always go to idle
-            set_state(PTT_IDLE);
+        // ===== BUTTON RELEASED =====
+
+        ESP_LOGI(TAG, "PTT event: RELEASE (hold_time=%lums, state=%s, just_latched=%d)",
+                 (unsigned long)hold_time_ms,
+                 current_state == PTT_IDLE ? "IDLE" :
+                 current_state == PTT_LATCHED ? "LATCHED" : "MOMENTARY",
+                 just_latched);
+
+        if (current_state == PTT_IDLE) {
+            // Released while idle: stay idle (already handled above)
         }
         else if (current_state == PTT_LATCHED) {
-            // Quick release from latched: toggle off
-            set_state(PTT_IDLE);
+            // Released while latched: check what type of press this was
+            if (hold_time_ms >= PTT_HOLD_THRESHOLD_MS) {
+                // Long hold: user tried momentary, unlatch
+                ESP_LOGI(TAG, "Long hold detected, unlatching");
+                set_state(PTT_IDLE);
+                just_latched = false;
+            } else {
+                // Quick release
+                if (just_latched) {
+                    // This was the LATCH press - stay latched!
+                    ESP_LOGI(TAG, "First quick press - staying LATCHED");
+                    just_latched = false;  // Clear flag (now we're "been latched")
+                    // Stay in LATCHED state (don't call set_state)
+                } else {
+                    // This was the UNLATCH press - go to idle
+                    ESP_LOGI(TAG, "Second quick press - UNLATCHING");
+                    set_state(PTT_IDLE);
+                }
+            }
         }
-        // If idle, stay idle
+        else if (current_state == PTT_MOMENTARY) {
+            // Released from momentary: go back to idle
+            set_state(PTT_IDLE);
+            just_latched = false;
+        }
     }
 }
 
@@ -101,5 +143,21 @@ ptt_state_t ptt_control_get_state(void)
 bool ptt_control_is_transmitting(void)
 {
     return (current_state == PTT_LATCHED || current_state == PTT_MOMENTARY);
+}
+
+void ptt_control_force_idle(void)
+{
+    ESP_LOGW(TAG, "⚠️  PTT FORCE RESET TO IDLE (was %s)",
+             current_state == PTT_IDLE ? "IDLE" :
+             current_state == PTT_LATCHED ? "LATCHED" : "MOMENTARY");
+
+    current_state = PTT_IDLE;
+    just_latched = false;
+    button_currently_pressed = false;
+
+    // Notify callback
+    if (user_callback) {
+        user_callback(PTT_IDLE, false);
+    }
 }
 #endif // DEVICE_TYPE_PACK

@@ -68,6 +68,12 @@ ptt_state_t ptt_control_get_state(void);
  */
 bool ptt_control_is_transmitting(void);
 
+/**
+ * @brief Force PTT to IDLE state (emergency reset)
+ * Use this if PTT gets stuck due to noise/glitches
+ */
+void ptt_control_force_idle(void);
+
 #else
 // Base station - inline stubs (no PTT buttons)
 
@@ -87,6 +93,10 @@ static inline ptt_state_t ptt_control_get_state(void) {
 
 static inline bool ptt_control_is_transmitting(void) {
     return false;
+}
+
+static inline void ptt_control_force_idle(void) {
+    // No-op on base
 }
 
 #endif // DEVICE_TYPE_PACK
