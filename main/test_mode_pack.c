@@ -8,6 +8,9 @@
 
 #include "test_mode_pack.h"
 #include "config.h"
+
+#if DEVICE_TYPE_PACK && TEST_MODE_ENABLE
+
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -146,12 +149,19 @@ static void test_audio_task(void *arg)
 
             // Show input level
             int16_t max_input = 0;
+            int16_t min_input = 0;
             for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
-                int16_t abs_val = abs(input_buffer[i]);
-                if (abs_val > max_input) max_input = abs_val;
+                if (input_buffer[i] > max_input) max_input = input_buffer[i];
+                if (input_buffer[i] < min_input) min_input = input_buffer[i];
             }
-            float input_db = 20.0f * log10f((float)max_input / 32768.0f);
-            printf("  Input level: %d (%.1f dB)\n", max_input, input_db);
+            int16_t peak = (max_input > abs(min_input)) ? max_input : abs(min_input);
+            float input_db = (peak > 0) ? 20.0f * log10f((float)peak / 32768.0f) : -INFINITY;
+
+            printf("  Input: peak=%d, min=%d, max=%d (%.1f dB)\n",
+                   peak, min_input, max_input, input_db);
+            printf("  First 8 samples: %d, %d, %d, %d, %d, %d, %d, %d\n",
+                   input_buffer[0], input_buffer[1], input_buffer[2], input_buffer[3],
+                   input_buffer[4], input_buffer[5], input_buffer[6], input_buffer[7]);
         }
 
         // Wait for next frame
@@ -227,3 +237,5 @@ void test_mode_stop(void)
     
     ESP_LOGI(TAG, "Test mode stopped");
 }
+
+#endif // DEVICE_TYPE_BASE && TEST_MODE_ENABLE

@@ -30,7 +30,12 @@
 #include "hardware/ptt_control.h"
 #include "hardware/battery.h"
 #include "hardware/clearcom_line.h"
+#if DEVICE_TYPE_BASE && TEST_MODE_ENABLE
+#include "test_mode_base.h"
+# elif DEVICE_TYPE_PACK && TEST_MODE_ENABLE
 #include "test_mode_pack.h"
+#endif
+
 
 static const char *TAG = "MAIN";
 

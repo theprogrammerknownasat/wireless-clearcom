@@ -90,6 +90,17 @@ static esp_err_t wm8960_write_reg(uint8_t reg, uint16_t value)
     return ret;
 }
 
+static esp_err_t wm8960_read_reg(uint8_t reg, uint16_t *value)
+{
+    // WM8960 doesn't support I2C read - we can only write!
+    // This is a limitation of the WM8960 codec.
+    // Return ESP_ERR_NOT_SUPPORTED to indicate this.
+    // For debugging, we'll have to trust our writes worked.
+    ESP_LOGW(TAG, "WM8960 does not support I2C register reads - skipping verification");
+    *value = 0xFFFF;  // Invalid value to indicate read not possible
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
 static esp_err_t wm8960_init_i2c(void)
 {
     ESP_LOGI(TAG, "Initializing I2C for WM8960...");
@@ -247,6 +258,98 @@ static esp_err_t wm8960_configure(void)
     }
     ESP_LOGI(TAG, "  ✓ Jack detect configured");
 
+    // ========== MICROPHONE INPUT CONFIGURATION ==========
+    ESP_LOGI(TAG, "Configuring line-level input (from SSM2167 preamp)...");
+
+    // Enable ADC - BOTH CHANNELS (like when we got audio before)
+    // POWER1: Enable AINL, AINR, ADCL, ADCR, MICB
+    // Even though we only use left input, enabling both might be required
+    // for proper ADC operation
+    if (wm8960_write_reg(WM8960_REG_POWER1, 0x1FE) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to enable ADC in POWER1");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ POWER1 = 0x1FE (VMID + VREF + BOTH ADCs + MIC BIAS)");
+
+    // POWER3: Enable BOTH input mixers (like when we got audio)
+    if (wm8960_write_reg(0x2F, 0x3C) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to enable input mixers in POWER3");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ POWER3 = 0x3C (output + BOTH input mixers)");
+
+    // Configure ADC input: Use same config as when we got audio
+    // Register 0x20 = 0x138 (this got us audio before, even if garbled)
+    if (wm8960_write_reg(0x20, 0x138) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure left ADC input");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ Left ADC: 0x138 config (same as when we got audio)");
+
+    // Right ADC: Same as left
+    if (wm8960_write_reg(0x21, 0x138) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure right ADC input");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ Right ADC: 0x138 config");
+
+    // Set input boost mixer gain
+    // Even for line-level, we might need some boost through the mixer path
+    // Register 0x2B (Left Input Boost Mixer):
+    // Bits 6-4: LIN2BOOST = 000 (not used)
+    // Bits 2-0: LIN3BOOST = 000 (not used)
+    // We're using LMIC2B (mic input to boost) which is controlled separately
+    // Set to +13dB boost to help with signal level
+    if (wm8960_write_reg(0x2B, 0x010) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set left input boost");
+        return ESP_FAIL;
+    }
+    if (wm8960_write_reg(0x2C, 0x000) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set right input boost");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ Input boost configured (+13dB)");
+
+    // Set ADC volume - restore 0dB like when we got audio
+    if (wm8960_write_reg(0x15, 0x1C3) != ESP_OK) {  // Left ADC: 0dB
+        ESP_LOGE(TAG, "Failed to set left ADC volume");
+        return ESP_FAIL;
+    }
+    if (wm8960_write_reg(0x16, 0x1C3) != ESP_OK) {  // Right ADC: 0dB
+        ESP_LOGE(TAG, "Failed to set right ADC volume");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ ADC volumes set (0dB - same as when we got audio)");
+
+    // Set input PGA volume - RESTORE +30dB like when we got audio
+    // (Yes it's too much for line-level, but let's get SOMETHING first)
+    if (wm8960_write_reg(0x00, 0x13F) != ESP_OK) {  // Left input volume: +30dB
+        ESP_LOGE(TAG, "Failed to set left input volume");
+        return ESP_FAIL;
+    }
+    if (wm8960_write_reg(0x01, 0x13F) != ESP_OK) {  // Right input volume: +30dB
+        ESP_LOGE(TAG, "Failed to set right input volume");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ Input PGA volumes set (+30dB - same as when we got audio)");
+
+    // CRITICAL: Enable ADC high-pass filter and other ADC settings
+    // Register 0x17 (Additional Control 1): ADCHPD=0 enables HP filter
+    // This is often required for ADC to work properly
+    if (wm8960_write_reg(0x17, 0x00C0) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set additional control 1");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ ADC additional controls configured");
+
+    ESP_LOGI(TAG, "Line-level input configured successfully (dynamic mic + SSM2167)");
+
+    // ========== VERIFY REGISTER VALUES ==========
+    // NOTE: WM8960 does not support I2C register reads!
+    // We cannot verify our writes, but if we got ESP_OK from each write,
+    // the registers should be set correctly.
+    ESP_LOGI(TAG, "WM8960 configuration complete - cannot readback (codec limitation)");
+
     ESP_LOGI(TAG, "WM8960 configured successfully");
     return ESP_OK;
 }
@@ -268,7 +371,7 @@ static esp_err_t wm8960_init_i2s(void)
             .clk_src = I2S_CLK_SRC_DEFAULT,         // Use default PLL (APLL not available in 5.5.2)
             .mclk_multiple = I2S_MCLK_MULTIPLE_256, // MCLK = 256 × sample_rate = 4.096 MHz
         },
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = I2S_MCLK_PIN,  // MCLK output on GPIO 2
             .bclk = I2S_BCLK_PIN,
@@ -464,11 +567,14 @@ esp_err_t audio_codec_read(int16_t *buffer, size_t sample_count, size_t *samples
     }
 
 #if !SIMULATE_HARDWARE
-    // Read from WM8960 via I2S
-    size_t bytes_read = 0;
-    size_t bytes_to_read = sample_count * sizeof(int16_t);
+    // Read from WM8960 via I2S (stereo interleaved: L, R, L, R...)
+    // We need to read 2x samples since we're in stereo mode
+    static int16_t stereo_buffer[SAMPLES_PER_FRAME * 2];  // Temp buffer for stereo data
 
-    esp_err_t ret = i2s_channel_read(rx_handle, buffer, bytes_to_read,
+    size_t bytes_read = 0;
+    size_t bytes_to_read = sample_count * 2 * sizeof(int16_t);  // *2 for stereo
+
+    esp_err_t ret = i2s_channel_read(rx_handle, stereo_buffer, bytes_to_read,
                                      &bytes_read, portMAX_DELAY);
 
     if (ret != ESP_OK) {
@@ -477,9 +583,31 @@ esp_err_t audio_codec_read(int16_t *buffer, size_t sample_count, size_t *samples
         return ret;
     }
 
+    // Downmix stereo to mono: Use ONLY left channel (right not connected)
+    size_t stereo_samples = bytes_read / sizeof(int16_t);
+    size_t mono_samples = stereo_samples / 2;
+
+    // DEBUG: Log first read to see what we're getting
+    static bool first_read = true;
+    if (first_read) {
+        first_read = false;
+        ESP_LOGI(TAG, "First I2S read: bytes=%zu, stereo_samples=%zu, mono_samples=%zu",
+                 bytes_read, stereo_samples, mono_samples);
+        ESP_LOGI(TAG, "First 8 stereo pairs (L,R): [%d,%d] [%d,%d] [%d,%d] [%d,%d]",
+                 stereo_buffer[0], stereo_buffer[1],
+                 stereo_buffer[2], stereo_buffer[3],
+                 stereo_buffer[4], stereo_buffer[5],
+                 stereo_buffer[6], stereo_buffer[7]);
+    }
+
+    for (size_t i = 0; i < mono_samples; i++) {
+        // Only use left channel (right is tied to VMID, will be noise)
+        buffer[i] = stereo_buffer[i * 2];  // Left channel only
+    }
+
     // Convert bytes to samples
     if (samples_read) {
-        *samples_read = bytes_read / sizeof(int16_t);
+        *samples_read = mono_samples;
     }
 #endif
 
@@ -506,11 +634,19 @@ esp_err_t audio_codec_write(const int16_t *buffer, size_t sample_count)
     }
 
 #if !SIMULATE_HARDWARE
-    // Write to WM8960 via I2S
-    size_t bytes_written = 0;
-    size_t bytes_to_write = sample_count * sizeof(int16_t);
+    // Upmix mono to stereo: duplicate mono sample to both L and R
+    static int16_t stereo_buffer[SAMPLES_PER_FRAME * 2];  // Temp buffer for stereo data
 
-    esp_err_t ret = i2s_channel_write(tx_handle, buffer, bytes_to_write,
+    for (size_t i = 0; i < sample_count; i++) {
+        stereo_buffer[i * 2] = buffer[i];      // Left
+        stereo_buffer[i * 2 + 1] = buffer[i];  // Right (same as left)
+    }
+
+    // Write stereo data to WM8960 via I2S
+    size_t bytes_written = 0;
+    size_t bytes_to_write = sample_count * 2 * sizeof(int16_t);  // *2 for stereo
+
+    esp_err_t ret = i2s_channel_write(tx_handle, stereo_buffer, bytes_to_write,
                                       &bytes_written, portMAX_DELAY);
 
     if (ret != ESP_OK) {
