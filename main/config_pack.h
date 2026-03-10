@@ -1,7 +1,7 @@
 /**
  * @file config_pack.h
  * @brief Belt Pack Specific Configuration
- *
+ * 
  * Settings that only apply to belt pack devices.
  */
 
@@ -18,6 +18,15 @@
 
 // Which base station this belt pack is paired with
 #define PAIRED_BASE_ID          0x80
+
+//=============================================================================
+// TEST MODE
+//=============================================================================
+
+// Enable test mode: outputs 440Hz tone to headphones
+// Set to 1 to test WM8960 audio output
+// Set to 0 for normal operation
+#define TEST_MODE_ENABLE        1  // ← ENABLED for audio testing
 
 //=============================================================================
 // NETWORK CONFIGURATION (Pack = WiFi Station)

@@ -4,6 +4,7 @@ idf_component_register(
         SRCS
         "main.c"
         "test_mode_base.c"
+        "test_mode_pack.c"
         "system/device_manager.c"
         # Phase 2 audio files:
         "audio/audio_codec.c"

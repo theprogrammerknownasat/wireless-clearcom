@@ -77,7 +77,7 @@ esp_err_t audio_codec_set_output_volume(uint8_t volume);
  * @param sample_count Number of samples to read
  * @return ESP_OK on success
  */
-esp_err_t audio_codec_read(int16_t *buffer, size_t sample_count);
+esp_err_t audio_codec_read(int16_t *buffer, size_t sample_count, size_t *samples_read);
 
 /**
  * @brief Write audio samples to codec (speaker/line output)

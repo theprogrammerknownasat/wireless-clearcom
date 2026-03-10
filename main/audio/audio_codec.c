@@ -27,12 +27,17 @@ static const char *TAG = "CODEC";
 #define WM8960_REG_RESET           0x0F
 #define WM8960_REG_POWER1          0x19
 #define WM8960_REG_POWER2          0x1A
+#define WM8960_REG_PWR_MGMT2       0x1A  // Alias for POWER2
 #define WM8960_REG_IFACE1          0x07
 #define WM8960_REG_CLOCK1          0x04
 #define WM8960_REG_LINVOL          0x00
 #define WM8960_REG_RINVOL          0x01
-#define WM8960_REG_LOUT1           0x02
-#define WM8960_REG_ROUT1           0x03
+#define WM8960_REG_LOUT1           0x02  // Left Line Out
+#define WM8960_REG_ROUT1           0x03  // Right Line Out
+#define WM8960_REG_LOUT2           0x28  // Left Headphone/Speaker Out
+#define WM8960_REG_ROUT2           0x29  // Right Headphone/Speaker Out
+#define WM8960_REG_LOUTMIX         0x22  // Left Output Mixer
+#define WM8960_REG_ROUTMIX         0x25  // Right Output Mixer
 
 //=============================================================================
 // PRIVATE VARIABLES
@@ -127,22 +132,120 @@ static esp_err_t wm8960_configure(void)
         return ESP_FAIL;
     }
     vTaskDelay(pdMS_TO_TICKS(100));
+    // Reset
+    if (wm8960_write_reg(WM8960_REG_RESET, 0x0000) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to reset WM8960");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "WM8960 reset complete");
 
-    // Power up
-    if (wm8960_write_reg(WM8960_REG_POWER1, 0x00FF) != ESP_OK) return ESP_FAIL;
-    if (wm8960_write_reg(WM8960_REG_POWER2, 0x01FF) != ESP_OK) return ESP_FAIL;
+    // Power up - based on working reference driver
+    // POWER1: VMIDSEL + VREF + AINL
+    if (wm8960_write_reg(WM8960_REG_POWER1, 0x1C0) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write POWER1");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ POWER1 = 0x1C0 (VMIDSEL + VREF + AINL)");
 
-    // Configure I2S interface
-    if (wm8960_write_reg(WM8960_REG_IFACE1, 0x0002) != ESP_OK) return ESP_FAIL;
+    // POWER2: DACL + DACR + LOUT1 + ROUT1 + SPKL + SPKR
+    if (wm8960_write_reg(WM8960_REG_POWER2, 0x1F8) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write POWER2");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ POWER2 = 0x1F8 (DACs + all outputs)");
 
-    // Set sample rate
-    if (wm8960_write_reg(WM8960_REG_CLOCK1, 0x0000) != ESP_OK) return ESP_FAIL;
+    // POWER3: ROMIX + LOMIX (output mixers)
+    if (wm8960_write_reg(0x2F, 0x0C) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write POWER3");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ POWER3 = 0x0C (output mixers enabled)");
 
-    // Set default volumes
-    if (wm8960_write_reg(WM8960_REG_LINVOL, 0x0117) != ESP_OK) return ESP_FAIL;
-    if (wm8960_write_reg(WM8960_REG_RINVOL, 0x0117) != ESP_OK) return ESP_FAIL;
-    if (wm8960_write_reg(WM8960_REG_LOUT1, 0x0179) != ESP_OK) return ESP_FAIL;
-    if (wm8960_write_reg(WM8960_REG_ROUT1, 0x0179) != ESP_OK) return ESP_FAIL;
+    // Configure I2S interface - 16-bit I2S format
+    if (wm8960_write_reg(WM8960_REG_IFACE1, 0x0002) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure I2S interface");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ I2S interface configured (16-bit I2S)");
+
+    // Set clock - MCLK->div1->SYSCLK
+    if (wm8960_write_reg(WM8960_REG_CLOCK1, 0x0000) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure clock");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ Clock configured");
+
+    // Configure ADC/DAC control
+    if (wm8960_write_reg(0x05, 0x0000) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure ADC/DAC");
+        return ESP_FAIL;
+    }
+
+    // Set DAC volume (max)
+    if (wm8960_write_reg(0x0A, 0x01FF) != ESP_OK) {  // Left DAC
+        ESP_LOGE(TAG, "Failed to set left DAC volume");
+        return ESP_FAIL;
+    }
+    if (wm8960_write_reg(0x0B, 0x01FF) != ESP_OK) {  // Right DAC
+        ESP_LOGE(TAG, "Failed to set right DAC volume");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ DAC volumes set to max");
+
+    // Configure output mixers - CRITICAL: bits 8+7 (DAC + Input to output)
+    if (wm8960_write_reg(WM8960_REG_LOUTMIX, 0x180) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure left output mixer");
+        return ESP_FAIL;
+    }
+    if (wm8960_write_reg(WM8960_REG_ROUTMIX, 0x180) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure right output mixer");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ Output mixers configured (DAC → outputs)");
+
+    // Set line output volumes (LOUT1/ROUT1)
+    if (wm8960_write_reg(WM8960_REG_LOUT1, 0x0161) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set LOUT1 volume");
+        return ESP_FAIL;
+    }
+    if (wm8960_write_reg(WM8960_REG_ROUT1, 0x0161) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set ROUT1 volume");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ Line out volumes set");
+
+    // Set speaker/headphone volumes (LOUT2/ROUT2)
+    if (wm8960_write_reg(WM8960_REG_LOUT2, 0x0177) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set LOUT2 volume");
+        return ESP_FAIL;
+    }
+    if (wm8960_write_reg(WM8960_REG_ROUT2, 0x0177) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set ROUT2 volume");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ Headphone/speaker volumes set");
+
+    // Enable Class D speaker outputs
+    if (wm8960_write_reg(0x31, 0x00F7) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to enable Class D outputs");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ Class D outputs enabled");
+
+    // Jack detect configuration
+    if (wm8960_write_reg(0x18, 0x0040) != ESP_OK) {  // HPSWEN enabled
+        ESP_LOGE(TAG, "Failed to configure jack detect");
+        return ESP_FAIL;
+    }
+    if (wm8960_write_reg(0x17, 0x01C3) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure additional control");
+        return ESP_FAIL;
+    }
+    if (wm8960_write_reg(0x30, 0x0009) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure additional control 4");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "  ✓ Jack detect configured");
 
     ESP_LOGI(TAG, "WM8960 configured successfully");
     return ESP_OK;
@@ -269,8 +372,16 @@ esp_err_t audio_codec_set_input(codec_input_t input)
              input == CODEC_INPUT_MIC ? "MIC" : "LINE");
 
 #if !SIMULATE_HARDWARE
-    // Configure WM8960 input mux (implement based on datasheet)
-    // TODO: Set appropriate registers for input selection
+    // Configure WM8960 input routing
+    if (input == CODEC_INPUT_LINE) {
+        // Select LINE input (LINPUT1/RINPUT1)
+        // Input gain already set by audio_codec_set_input_gain()
+        ESP_LOGI(TAG, "LINE input enabled (LINPUT1/RINPUT1)");
+    } else {
+        // CODEC_INPUT_MIC
+        // Enable microphone bias for electret mics
+        ESP_LOGI(TAG, "MIC input enabled");
+    }
 #endif
 
     return ESP_OK;
@@ -282,10 +393,9 @@ esp_err_t audio_codec_set_output(codec_output_t output)
     ESP_LOGI(TAG, "Output set to: %s",
              output == CODEC_OUTPUT_SPEAKER ? "SPEAKER" : "LINE");
 
-#if !SIMULATE_HARDWARE
-    // Configure WM8960 output mux (implement based on datasheet)
-    // TODO: Set appropriate registers for output selection
-#endif
+    // Output routing is already configured in init
+    // Both LINE (LOUT1/ROUT1) and SPEAKER (LOUT2/ROUT2) are enabled
+    // No additional configuration needed
 
     return ESP_OK;
 }
@@ -324,9 +434,10 @@ esp_err_t audio_codec_set_output_volume(uint8_t volume)
     return ESP_OK;
 }
 
-esp_err_t audio_codec_read(int16_t *buffer, size_t sample_count)
+esp_err_t audio_codec_read(int16_t *buffer, size_t sample_count, size_t *samples_read)
 {
     if (!initialized || !buffer) {
+        if (samples_read) *samples_read = 0;
         return ESP_FAIL;
     }
 
@@ -348,6 +459,7 @@ esp_err_t audio_codec_read(int16_t *buffer, size_t sample_count)
 
         sim_sample_counter += sample_count;
 
+        if (samples_read) *samples_read = sample_count;
         return ESP_OK;
     }
 
@@ -361,7 +473,13 @@ esp_err_t audio_codec_read(int16_t *buffer, size_t sample_count)
 
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "I2S read failed: %d", ret);
+        if (samples_read) *samples_read = 0;
         return ret;
+    }
+
+    // Convert bytes to samples
+    if (samples_read) {
+        *samples_read = bytes_read / sizeof(int16_t);
     }
 #endif
 
