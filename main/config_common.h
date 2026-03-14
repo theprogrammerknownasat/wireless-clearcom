@@ -106,7 +106,7 @@
 // Base: outputs 440Hz tone to partyline, monitors input levels
 // Pack: mic → delay → headphone loopback
 // Set to 1 for testing, 0 for production
-#define TEST_MODE_ENABLE        0
+#define TEST_MODE_ENABLE        1
 
 //=============================================================================
 // GPIO PIN ASSIGNMENTS (ESP32-S3)

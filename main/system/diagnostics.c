@@ -175,6 +175,10 @@ esp_err_t diagnostics_run_self_test(diagnostics_result_t *results)
 
     // Test 8: WiFi
     ESP_LOGI(TAG, "Testing WiFi...");
+#if TEST_MODE_ENABLE
+    results->wifi = TEST_SKIP;
+    ESP_LOGI(TAG, "  WiFi: SKIP (disabled in test mode)");
+#else
     if (wifi_manager_is_initialized()) {
         results->wifi = TEST_PASS;
         ESP_LOGI(TAG, "  WiFi: PASS (manager initialized)");
@@ -182,9 +186,14 @@ esp_err_t diagnostics_run_self_test(diagnostics_result_t *results)
         results->wifi = TEST_FAIL;
         ESP_LOGE(TAG, "  WiFi: FAIL (manager not initialized)");
     }
+#endif
 
     // Test 9: UDP
     ESP_LOGI(TAG, "Testing UDP...");
+#if TEST_MODE_ENABLE
+    results->udp = TEST_SKIP;
+    ESP_LOGI(TAG, "  UDP: SKIP (disabled in test mode)");
+#else
     if (udp_transport_is_initialized()) {
         results->udp = TEST_PASS;
         ESP_LOGI(TAG, "  UDP: PASS (transport initialized)");
@@ -192,6 +201,7 @@ esp_err_t diagnostics_run_self_test(diagnostics_result_t *results)
         results->udp = TEST_FAIL;
         ESP_LOGE(TAG, "  UDP: FAIL (transport not initialized)");
     }
+#endif
 
     // Test 10: NVS
     ESP_LOGI(TAG, "Testing NVS storage...");

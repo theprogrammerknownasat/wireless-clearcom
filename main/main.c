@@ -49,6 +49,7 @@ static const char *TAG = "MAIN";
 // CALLBACK HANDLERS
 //=============================================================================
 
+#if !TEST_MODE_ENABLE
 static void wifi_event_handler(wifi_event_type_t event, void *data)
 {
     switch (event) {
@@ -75,11 +76,17 @@ static void wifi_event_handler(wifi_event_type_t event, void *data)
             break;
     }
 }
+#endif // !TEST_MODE_ENABLE
 
+// Track whether we have an active audio stream (received at least one packet recently)
+static volatile int64_t last_audio_rx_time_us = 0;
+
+#if !TEST_MODE_ENABLE
 static void udp_rx_handler(const uint8_t *opus_data, uint16_t opus_size,
                            bool remote_ptt_active, bool remote_call_active)
 {
     device_manager_packet_received();
+    last_audio_rx_time_us = esp_timer_get_time();
 
 #if DEVICE_TYPE_PACK && (BATTERY_MODE != BATTERY_NONE)
     power_manager_activity();
@@ -103,6 +110,7 @@ static void udp_rx_handler(const uint8_t *opus_data, uint16_t opus_size,
 #endif
     }
 }
+#endif // !TEST_MODE_ENABLE
 
 static void ptt_state_handler(ptt_state_t state, bool transmitting)
 {
@@ -240,7 +248,6 @@ static void audio_task(void *arg)
 static void jitter_playback_task(void *arg)
 {
     ESP_LOGI(TAG, "Jitter playback task started");
-    esp_task_wdt_add(NULL);
 
     TickType_t last_wake = xTaskGetTickCount();
     int16_t pcm_frame[SAMPLES_PER_FRAME];
@@ -248,27 +255,33 @@ static void jitter_playback_task(void *arg)
 
     while (1) {
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(FRAME_SIZE_MS));
-        esp_task_wdt_reset();
 
         if (jitter_buffer_pop(pcm_frame, SAMPLES_PER_FRAME)) {
             audio_codec_write(pcm_frame, SAMPLES_PER_FRAME);
         } else {
-            // Buffer underrun - use Opus PLC to generate a concealment frame
-            int plc_samples = audio_opus_decode(NULL, 0, pcm_frame, SAMPLES_PER_FRAME, 1);
-            if (plc_samples > 0) {
-                audio_codec_write(pcm_frame, plc_samples);
-            } else {
-                // PLC failed, output silence
-                memset(pcm_frame, 0, SAMPLES_PER_FRAME * sizeof(int16_t));
-                audio_codec_write(pcm_frame, SAMPLES_PER_FRAME);
-            }
-
-            // Rate-limit underrun warnings to once per second
+            // No frame available - check if we have an active audio stream
+            // If no packets received in the last 500ms, don't write anything
+            // to I2S (avoids amplifying digital noise when disconnected)
             int64_t now_us = esp_timer_get_time();
-            if (now_us - last_underrun_log_us > 1000000) {
-                ESP_LOGW(TAG, "Jitter buffer underrun");
-                last_underrun_log_us = now_us;
+            bool stream_active = (last_audio_rx_time_us > 0) &&
+                                 (now_us - last_audio_rx_time_us < 500000);
+
+            if (stream_active) {
+                // Active stream but missed a frame - use Opus PLC
+                int plc_samples = audio_opus_decode(NULL, 0, pcm_frame, SAMPLES_PER_FRAME, 1);
+                if (plc_samples > 0) {
+                    audio_codec_write(pcm_frame, plc_samples);
+                } else {
+                    memset(pcm_frame, 0, SAMPLES_PER_FRAME * sizeof(int16_t));
+                    audio_codec_write(pcm_frame, SAMPLES_PER_FRAME);
+                }
+
+                if (now_us - last_underrun_log_us > 1000000) {
+                    ESP_LOGW(TAG, "Jitter buffer underrun");
+                    last_underrun_log_us = now_us;
+                }
             }
+            // else: no active stream, don't write to I2S (silence by omission)
         }
     }
 }
@@ -310,6 +323,7 @@ static void monitor_task(void *arg)
 #endif
 
         if (stats_counter % 5 == 0) {
+#if !TEST_MODE_ENABLE
             if (wifi_manager_is_connected()) {
                 int8_t rssi = wifi_manager_get_rssi();
                 device_manager_update_wifi(true, rssi);
@@ -331,6 +345,7 @@ static void monitor_task(void *arg)
             } else {
                 gpio_control_set_led(LED_STATUS, LED_OFF);
             }
+#endif // !TEST_MODE_ENABLE
         }
 
 #if DEVICE_TYPE_PACK && (BATTERY_MODE != BATTERY_NONE)
@@ -377,6 +392,7 @@ static esp_err_t init_subsystems(void)
     if (ret != ESP_OK) return ret;
 #endif
 
+#if !TEST_MODE_ENABLE
     ESP_LOGI(TAG, "Initializing network...");
     ret = wifi_manager_init(wifi_event_handler);
     if (ret != ESP_OK) return ret;
@@ -389,6 +405,9 @@ static esp_err_t init_subsystems(void)
 
     ret = udp_transport_start();
     if (ret != ESP_OK) return ret;
+#else
+    ESP_LOGW(TAG, "TEST MODE - network disabled");
+#endif
 
     ESP_LOGI(TAG, "Initializing hardware...");
 
@@ -523,7 +542,7 @@ void app_main(void)
 #else
     xTaskCreate(audio_task, "audio", 32768, NULL, 6, NULL);
 #if JITTER_BUFFER_ENABLE
-    xTaskCreate(jitter_playback_task, "jitter_pb", 4096, NULL, 6, NULL);
+    xTaskCreate(jitter_playback_task, "jitter_pb", 8192, NULL, 6, NULL);
 #endif
 #endif
     xTaskCreate(monitor_task, "monitor", 4096, NULL, 3, NULL);

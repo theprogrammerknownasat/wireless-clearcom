@@ -315,12 +315,17 @@ esp_err_t audio_codec_set_input_gain(uint8_t gain)
 
 esp_err_t audio_codec_set_output_volume(uint8_t volume)
 {
-    if (volume > 31) volume = 31;
-    // Map 0-31 across HP volume range (0x30=-73dB to 0x7F=+6dB)
-    uint16_t vol_reg = 0x30 + ((uint16_t)volume * (0x7F - 0x30) / 31);
-    uint16_t reg_val = 0x100 | vol_reg;
+    // Volume: 0 = mute, 1-127 = -73dB to +6dB
+    // WM8960 LOUT1 register: 0x00=mute, 0x01=-73dB ... 0x79=0dB ... 0x7F=+6dB
+    // 128 steps of ~0.6dB each for smooth analog-feel control
+    if (volume > 127) volume = 127;
+
+    uint16_t vol_reg = volume;  // Direct 1:1 mapping to WM8960 register
+    uint16_t reg_val = 0x100 | vol_reg;  // Bit 8 = update both L/R together
+
     wm8960_write_reg(WM8960_REG_LOUT1, reg_val);
     wm8960_write_reg(WM8960_REG_ROUT1, reg_val);
+
     return ESP_OK;
 }
 

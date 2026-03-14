@@ -33,7 +33,7 @@
 // Microphone input gain (0-31)
 // Adjust if mic is too quiet or too loud
 // Typical: 15-25 for dynamic mics
-#define MIC_GAIN_LEVEL          20
+#define MIC_GAIN_LEVEL          28
 
 // Enable sidetone (hear yourself when talking)
 // 0 = disabled, 1 = enabled (recommended for RS-701 emulation)
@@ -58,6 +58,12 @@
 
 // Button debounce time (milliseconds)
 #define BUTTON_DEBOUNCE_MS      20
+
+// Test mode selection (only used when TEST_MODE_ENABLE = 1)
+// 0 = Mic loopback with delay (tests full audio path)
+// 1 = 440Hz sine wave output at 0 dBFS (tests output level only)
+//     If tone is loud, mic gain is the issue. If tone is quiet, output gain is.
+#define TEST_PACK_MODE          0
 
 //=============================================================================
 // GPIO PIN ASSIGNMENTS (Belt Pack Specific)
