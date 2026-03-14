@@ -100,7 +100,7 @@ static void test_audio_task(void *arg)
     printf("========================================\n");
     printf("  BELT PACK LOOPBACK TEST MODE\n");
     printf("========================================\n");
-    printf("🎤 Microphone → 2 second delay → 🎧 Headphones\n");
+    printf("Mic -> 2s delay -> Headphones\n");
     printf("Speak into microphone, hear yourself 2s later\n");
     printf("========================================\n\n");
 
@@ -134,7 +134,7 @@ static void test_audio_task(void *arg)
 
         // Log first output frame (after 2 second delay is filled)
         if (!first_output && frame_count >= DELAY_FRAMES) {
-            printf("✓ Delay buffer filled! Loopback active.\n");
+            printf("Delay buffer filled - loopback active.\n");
             printf("First output frame: samples=%d, first=%d, mid=%d, last=%d\n",
                    SAMPLES_PER_FRAME, output_buffer[0],
                    output_buffer[SAMPLES_PER_FRAME/2],

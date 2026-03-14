@@ -44,10 +44,10 @@
 //=============================================================================
 
 // WiFi SSID (network name)
-#define WIFI_SSID               "ClearCom_Base"
+#define WIFI_SSID               "Intercom_Base"
 
 // WiFi Password (minimum 8 characters for WPA2)
-#define WIFI_PASSWORD           "clearcom123"
+#define WIFI_PASSWORD           "intercom123"
 
 // WiFi Channel (1, 6, or 11 recommended for 2.4GHz to avoid overlap)
 #define WIFI_CHANNEL            6
@@ -79,6 +79,16 @@
 #define STATS_INTERVAL_MS       5000
 
 //=============================================================================
+// TEST MODE
+//=============================================================================
+
+// Enable test mode for hardware verification
+// Base: outputs 440Hz tone to partyline, monitors input levels
+// Pack: mic → delay → headphone loopback
+// Set to 1 for testing, 0 for production
+#define TEST_MODE_ENABLE        0
+
+//=============================================================================
 // GPIO PIN ASSIGNMENTS (ESP32-S3)
 //=============================================================================
 
@@ -102,9 +112,6 @@
 //=============================================================================
 // TIMING CONSTANTS
 //=============================================================================
-
-// Button debounce time (milliseconds)
-#define BUTTON_DEBOUNCE_MS      50
 
 // Network reconnect delay (milliseconds)
 #define WIFI_RECONNECT_DELAY_MS 2000

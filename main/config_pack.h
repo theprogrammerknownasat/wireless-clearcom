@@ -20,15 +20,6 @@
 #define PAIRED_BASE_ID          0x80
 
 //=============================================================================
-// TEST MODE
-//=============================================================================
-
-// Enable test mode: outputs 440Hz tone to headphones
-// Set to 1 to test WM8960 audio output
-// Set to 0 for normal operation
-#define TEST_MODE_ENABLE        1  // ← ENABLED for audio testing
-
-//=============================================================================
 // NETWORK CONFIGURATION (Pack = WiFi Station)
 //=============================================================================
 
@@ -58,8 +49,12 @@
 //=============================================================================
 
 // Time to hold button before switching from latch to momentary (ms)
-// Typical: 200ms
 #define PTT_HOLD_THRESHOLD_MS   200
+
+// PTT stuck watchdog: force-idle after this many seconds of continuous TX
+// Set PTT_TIMEOUT_ENABLE to 0 to disable (operator may need unlimited TX)
+#define PTT_TIMEOUT_ENABLE      1
+#define PTT_TIMEOUT_SECONDS     300     // 5 minutes
 
 // Button debounce time (milliseconds)
 #define BUTTON_DEBOUNCE_MS      20

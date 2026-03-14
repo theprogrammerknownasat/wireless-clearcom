@@ -52,16 +52,6 @@ esp_err_t diagnostics_run_self_test(diagnostics_result_t *results)
 
     memset(results, 0, sizeof(diagnostics_result_t));
 
-#if SIMULATE_HARDWARE
-    ESP_LOGW(TAG, "SIMULATION MODE - Skipping hardware tests");
-    ESP_LOGW(TAG, "All hardware tests marked as SKIP");
-
-    results->codec_i2c = TEST_SKIP;
-    results->codec_audio = TEST_SKIP;
-    results->battery_adc = TEST_SKIP;
-    results->gpio_buttons = TEST_SKIP;
-    results->gpio_leds = TEST_SKIP;
-#else
     // Test 1: WM8960 I2C Communication
     ESP_LOGI(TAG, "Testing WM8960 I2C...");
     // In production, would attempt I2C read/write
@@ -100,7 +90,6 @@ esp_err_t diagnostics_run_self_test(diagnostics_result_t *results)
     // Would toggle LEDs briefly
     results->gpio_leds = TEST_PASS;
     ESP_LOGI(TAG, "  LED GPIOs: PASS");
-#endif
 
     // Test 6: Opus encoder
     ESP_LOGI(TAG, "Testing Opus encoder...");
@@ -179,20 +168,10 @@ esp_err_t diagnostics_run_self_test(diagnostics_result_t *results)
     ESP_LOGI(TAG, "========================================");
 
     if (!results->all_passed) {
-#if !SIMULATE_HARDWARE
-        ESP_LOGE(TAG, "╔════════════════════════════════════════╗");
-        ESP_LOGE(TAG, "║  CRITICAL: SELF-TEST FAILED           ║");
-        ESP_LOGE(TAG, "║  System will HALT                     ║");
-        ESP_LOGE(TAG, "║  Check hardware connections           ║");
-        ESP_LOGE(TAG, "╚════════════════════════════════════════╝");
-
-        // In production mode, halt on self-test failure
-        while(1) {
+        ESP_LOGE(TAG, "CRITICAL: SELF-TEST FAILED - check hardware");
+        while (1) {
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
-#else
-        ESP_LOGW(TAG, "Self-test failures ignored in simulation mode");
-#endif
     }
 
     return results->all_passed ? ESP_OK : ESP_FAIL;

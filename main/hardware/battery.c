@@ -239,4 +239,9 @@ void battery_deinit(void)
     ESP_LOGI(TAG, "Battery monitoring deinitialized");
 }
 
+void *battery_get_adc_handle(void)
+{
+    return (void *)adc_handle;
+}
+
 #endif // DEVICE_TYPE_PACK

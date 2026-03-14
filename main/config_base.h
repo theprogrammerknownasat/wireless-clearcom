@@ -1,7 +1,7 @@
 /**
  * @file config_base.h
  * @brief Base Station Specific Configuration
- *
+ * 
  * Settings that only apply to base station devices.
  */
 
@@ -30,16 +30,17 @@
 #define MAX_STA_CONN            1
 
 //=============================================================================
-// CLEARCOM PARTY LINE INTERFACE
+// PARTY LINE INTERFACE
 //=============================================================================
 
 // Party line audio input gain (0-31)
-// Adjust if audio from wired ClearCom is too quiet or too loud
+// Adjust if audio from wired intercom is too quiet or too loud
 #define PARTYLINE_INPUT_GAIN    20
 
 // Party line audio output gain (0-31)
-// Adjust if audio to wired ClearCom is too quiet or too loud
-#define PARTYLINE_OUTPUT_GAIN   20
+// Adjust if audio to wired intercom is too quiet or too loud
+// 31 = max (+6dB), 20 = about -23dB
+#define PARTYLINE_OUTPUT_GAIN   31
 
 // Enable DC blocking on party line input (recommended)
 // 0 = disabled, 1 = enabled
@@ -49,18 +50,22 @@
 // GPIO PIN ASSIGNMENTS (Base Station Specific)
 //=============================================================================
 
-// I2S MCLK (base uses GPIO 2)
-#define I2S_MCLK_PIN            GPIO_NUM_2
+// I2S MCLK (base uses GPIO 3, same as pack!)
+#define I2S_MCLK_PIN            GPIO_NUM_3
 
 // PTT Mirror LED (shows connected pack's PTT state)
 #define LED_PTT_MIRROR_PIN      GPIO_NUM_13
 
 // Call detection from party line (ADC input)
-// Reads scaled-down call voltage to detect incoming calls
-#define CALL_RX_PIN             GPIO_NUM_1   // ADC1_CH0
-#define CALL_RX_ADC_CHANNEL     ADC_CHANNEL_0
+// 100k/10k voltage divider: partyline voltage / 11
+#define CALL_RX_PIN             GPIO_NUM_2    // ADC1_CH1
+#define CALL_RX_ADC_CHANNEL     ADC_CHANNEL_1
+
+// Call TX - drives 2N7002K MOSFET to assert call on partyline
+#define CALL_TX_PIN             GPIO_NUM_21
 
 // Call voltage thresholds (adjust based on your voltage divider)
+// With 100k/10k divider: 1.5V at GPIO = ~16.5V on partyline
 #define CALL_VOLTAGE_THRESHOLD  1.5f  // Volts - above this = call detected
 #define CALL_DEBOUNCE_MS        50    // Milliseconds - debounce time
 
@@ -97,7 +102,7 @@
 // POWER MANAGEMENT (Base Station)
 //=============================================================================
 
-// Base station is powered by 30V ClearCom line - no sleep modes
+// Base station is powered by 30V party line - no sleep modes
 // These are here for consistency but not used
 
 #define ENABLE_LIGHT_SLEEP      0
@@ -106,10 +111,6 @@
 //=============================================================================
 // DIAGNOSTICS
 //=============================================================================
-
-// Enable test mode (generates 440Hz tone, tests party line output)
-// Set to 1 for testing, 0 for production
-#define TEST_MODE_ENABLE        1
 
 // Enable self-test on boot
 #define SELFTEST_ENABLE         1

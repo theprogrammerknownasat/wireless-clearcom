@@ -1,6 +1,6 @@
 /**
  * @file audio_opus.h
- * @brief Opus Codec Wrapper for ClearCom Wireless
+ * @brief Opus Codec Wrapper for Production Intercom
  *
  * Provides simple encode/decode interface for Opus audio compression.
  */

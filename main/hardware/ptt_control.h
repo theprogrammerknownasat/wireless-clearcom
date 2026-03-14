@@ -2,7 +2,7 @@
  * @file ptt_control.h
  * @brief PTT State Machine (RS-701 Compatible)
  *
- * Implements PTT button behavior matching ClearCom RS-701:
+ * Implements PTT button behavior matching RS-701:
  * - Quick press: Toggle latch on/off
  * - Hold >200ms: Momentary PTT
  */

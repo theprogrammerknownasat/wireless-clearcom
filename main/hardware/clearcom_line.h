@@ -1,8 +1,8 @@
 /**
  * @file clearcom_line.h
- * @brief ClearCom Party Line Interface (Base Station Only)
+ * @brief Party Line Interface (Base Station Only)
  *
- * Handles audio interface to wired ClearCom party line system.
+ * Handles audio interface to wired party line intercom system.
  * Uses WM8960 line input/output for balanced audio.
  */
 
@@ -29,7 +29,7 @@ typedef struct {
 //=============================================================================
 
 /**
- * @brief Initialize ClearCom line interface
+ * @brief Initialize intercom line interface
  * @return ESP_OK on success
  */
 esp_err_t clearcom_line_init(void);
@@ -79,6 +79,18 @@ void clearcom_line_set_output_gain(uint8_t gain);
  * @param gain Gain level (0-31)
  */
 void clearcom_line_set_input_gain(uint8_t gain);
+
+/**
+ * @brief Start partyline call monitoring (RX detection + TX assertion)
+ * Bridges partyline call signals with call_module.
+ * @return ESP_OK on success
+ */
+esp_err_t clearcom_line_call_start(void);
+
+/**
+ * @brief Stop partyline call monitoring
+ */
+void clearcom_line_call_stop(void);
 
 /**
  * @brief Deinitialize line interface

@@ -207,14 +207,14 @@ static void button_monitor_task(void *arg)
                 if (current_ptt) {
                     // Button pressed
                     ptt_press_time = esp_timer_get_time() / 1000;  // ms
-                    ESP_LOGI(TAG, "🔴 PTT button PRESSED");
+                    ESP_LOGI(TAG, "PTT PRESSED");
                     if (user_ptt_callback) {
                         user_ptt_callback(true, 0);
                     }
                 } else {
                     // Button released
                     int64_t hold_time = (esp_timer_get_time() / 1000) - ptt_press_time;
-                    ESP_LOGI(TAG, "⚪ PTT button RELEASED (held %lld ms)", hold_time);
+                    ESP_LOGI(TAG, "PTT RELEASED (%lld ms)", hold_time);
                     if (user_ptt_callback) {
                         user_ptt_callback(false, (uint32_t)hold_time);
                     }
@@ -240,7 +240,7 @@ static void button_monitor_task(void *arg)
             current_call = call_pressed;
 
             if (current_call != last_call) {  // Confirmed change
-                ESP_LOGI(TAG, "📞 CALL button %s", current_call ? "PRESSED" : "RELEASED");
+                ESP_LOGI(TAG, "CALL %s", current_call ? "PRESSED" : "RELEASED");
                 if (user_call_callback) {
                     user_call_callback(current_call);
                 }

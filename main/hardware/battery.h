@@ -78,4 +78,15 @@ bool battery_is_critical(void);
  */
 void battery_deinit(void);
 
+/**
+ * @brief Get the ADC unit handle used by battery monitoring
+ *
+ * Other modules that need ADC1 channels (e.g., volume control) can
+ * share this handle instead of creating a second one (ESP-IDF only
+ * allows one handle per ADC unit).
+ *
+ * @return ADC oneshot unit handle, or NULL if not initialized
+ */
+void *battery_get_adc_handle(void);
+
 #endif // BATTERY_H

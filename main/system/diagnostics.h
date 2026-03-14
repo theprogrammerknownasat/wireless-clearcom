@@ -3,7 +3,7 @@
  * @brief System Diagnostics and Self-Test
  *
  * Runs comprehensive self-test on boot to verify all hardware.
- * CRITICAL: If SIMULATE_HARDWARE=0 and hardware fails, system HALTS.
+ * Halts on failure to prevent operating with faulty hardware.
  */
 
 #ifndef DIAGNOSTICS_H
@@ -50,9 +50,7 @@ typedef struct {
  * @param results Pointer to results structure
  * @return ESP_OK if all critical tests passed, ESP_FAIL otherwise
  *
- * CRITICAL BEHAVIOR:
- * - If SIMULATE_HARDWARE=1: Skips hardware tests, always returns ESP_OK
- * - If SIMULATE_HARDWARE=0: Requires all hardware, halts on failure
+ * Halts system on critical test failure.
  */
 esp_err_t diagnostics_run_self_test(diagnostics_result_t *results);
 

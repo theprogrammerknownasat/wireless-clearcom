@@ -9,6 +9,7 @@
 #if DEVICE_TYPE_PACK
 
 #include "esp_sleep.h"
+#include "esp_wifi.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
@@ -16,63 +17,48 @@
 
 static const char *TAG = "POWER";
 
-//=============================================================================
-// PRIVATE VARIABLES
-//=============================================================================
-
 static power_state_t current_state = POWER_STATE_ACTIVE;
 static power_state_callback_t user_callback = NULL;
 static int64_t last_activity_time = 0;
 
-//=============================================================================
-// PRIVATE FUNCTIONS
-//=============================================================================
-
 static void set_state(power_state_t new_state)
 {
     if (current_state != new_state) {
-        ESP_LOGI(TAG, "Power state: %s -> %s",
-                current_state == POWER_STATE_ACTIVE ? "ACTIVE" :
-                current_state == POWER_STATE_LIGHT_SLEEP ? "LIGHT_SLEEP" : "DEEP_SLEEP",
-                new_state == POWER_STATE_ACTIVE ? "ACTIVE" :
-                new_state == POWER_STATE_LIGHT_SLEEP ? "LIGHT_SLEEP" : "DEEP_SLEEP");
-
         current_state = new_state;
-
         if (user_callback) {
             user_callback(new_state);
         }
     }
 }
 
-//=============================================================================
-// PUBLIC FUNCTIONS
-//=============================================================================
-
 esp_err_t power_manager_init(power_state_callback_t callback)
 {
-    ESP_LOGI(TAG, "Initializing power manager...");
-
     user_callback = callback;
     current_state = POWER_STATE_ACTIVE;
-    last_activity_time = esp_timer_get_time() / 1000;  // ms
+    last_activity_time = esp_timer_get_time() / 1000;
 
-    // Configure wake sources
-    // Wake on PTT button (GPIO)
-    esp_sleep_enable_ext0_wakeup(BUTTON_PTT_PIN, 0);  // Wake on low (button press)
+    // Configure GPIO wake sources for deep sleep
+    // Both PTT and CALL buttons can wake from deep sleep
+    // Use ext1 to support multiple GPIO wake sources
+    uint64_t wake_mask = (1ULL << BUTTON_PTT_PIN) | (1ULL << BUTTON_CALL_PIN);
+    esp_sleep_enable_ext1_wakeup(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
 
-    ESP_LOGI(TAG, "Power manager initialized");
-    ESP_LOGI(TAG, "Light sleep timeout: %d seconds", LIGHT_SLEEP_TIMEOUT_SEC);
-    ESP_LOGI(TAG, "Deep sleep timeout: %d minutes", DEEP_SLEEP_TIMEOUT_MIN);
+    // For light sleep: GPIO wake + WiFi wake
+    gpio_wakeup_enable(BUTTON_PTT_PIN, GPIO_INTR_LOW_LEVEL);
+    gpio_wakeup_enable(BUTTON_CALL_PIN, GPIO_INTR_LOW_LEVEL);
+    esp_sleep_enable_gpio_wakeup();
+    esp_sleep_enable_wifi_wakeup();
+
+    ESP_LOGI(TAG, "Power manager initialized (light=%ds, deep=%dmin)",
+             LIGHT_SLEEP_TIMEOUT_SEC, DEEP_SLEEP_TIMEOUT_MIN);
 
     return ESP_OK;
 }
 
 void power_manager_activity(void)
 {
-    last_activity_time = esp_timer_get_time() / 1000;  // ms
+    last_activity_time = esp_timer_get_time() / 1000;
 
-    // If we were sleeping, wake up
     if (current_state != POWER_STATE_ACTIVE) {
         set_state(POWER_STATE_ACTIVE);
     }
@@ -80,55 +66,43 @@ void power_manager_activity(void)
 
 void power_manager_check_timeout(bool *light_sleep, bool *deep_sleep)
 {
-    int64_t now = esp_timer_get_time() / 1000;  // ms
+    int64_t now = esp_timer_get_time() / 1000;
     int64_t idle_time = now - last_activity_time;
 
-    int64_t light_sleep_threshold = LIGHT_SLEEP_TIMEOUT_SEC * 1000;
-    int64_t deep_sleep_threshold = DEEP_SLEEP_TIMEOUT_MIN * 60 * 1000;
-
     if (light_sleep) {
-        *light_sleep = (idle_time >= light_sleep_threshold);
+        *light_sleep = ENABLE_LIGHT_SLEEP &&
+                       (idle_time >= (int64_t)LIGHT_SLEEP_TIMEOUT_SEC * 1000);
     }
-
     if (deep_sleep) {
-        *deep_sleep = (idle_time >= deep_sleep_threshold);
+        *deep_sleep = ENABLE_DEEP_SLEEP &&
+                      (idle_time >= (int64_t)DEEP_SLEEP_TIMEOUT_MIN * 60 * 1000);
     }
 }
 
 esp_err_t power_manager_enter_light_sleep(void)
 {
-    ESP_LOGI(TAG, "Entering light sleep...");
-    ESP_LOGI(TAG, "Wake sources: PTT button, Call button");
-
     set_state(POWER_STATE_LIGHT_SLEEP);
 
-    // Configure wake sources for light sleep
-    // GPIO wake already configured in init
-
-    // Enter light sleep
+    // Light sleep keeps WiFi connected (auto light sleep)
+    // CPU halts but wakes on: button press, WiFi packet, or timer
     esp_light_sleep_start();
 
-    // Wake up!
-    ESP_LOGI(TAG, "Woke from light sleep");
+    // Woke up
     set_state(POWER_STATE_ACTIVE);
-    power_manager_activity();  // Reset activity timer
+    power_manager_activity();
 
     return ESP_OK;
 }
 
 esp_err_t power_manager_enter_deep_sleep(void)
 {
-    ESP_LOGI(TAG, "Entering deep sleep...");
-    ESP_LOGI(TAG, "Wake source: PTT button only");
-    ESP_LOGI(TAG, "Device will reset on wake");
-
+    ESP_LOGI(TAG, "Entering deep sleep (wake: PTT or CALL button)");
     set_state(POWER_STATE_DEEP_SLEEP);
 
-    // Enter deep sleep (does not return - device resets on wake)
+    // Deep sleep - device resets on wake
     esp_deep_sleep_start();
 
-    // Never reached
-    return ESP_OK;
+    return ESP_OK;  // Never reached
 }
 
 power_state_t power_manager_get_state(void)
@@ -138,7 +112,7 @@ power_state_t power_manager_get_state(void)
 
 uint32_t power_manager_get_idle_time(void)
 {
-    int64_t now = esp_timer_get_time() / 1000;  // ms
+    int64_t now = esp_timer_get_time() / 1000;
     return (uint32_t)(now - last_activity_time);
 }
 

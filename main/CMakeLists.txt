@@ -17,6 +17,7 @@ idf_component_register(
         # Phase 4 hardware files:
         "hardware/gpio_control.c"
         "hardware/battery.c"
+        "hardware/volume_control.c"
         "hardware/clearcom_line.c"
         "hardware/ptt_control.c"
         # Phase 5 diagnostics:

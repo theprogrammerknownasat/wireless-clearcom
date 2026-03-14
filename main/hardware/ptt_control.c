@@ -68,7 +68,7 @@ void ptt_control_button_event(bool pressed, uint32_t hold_time_ms)
     // SAFETY CHECK: Log unexpected state transitions for debugging
     if (!pressed && current_state == PTT_IDLE) {
         // Got release event while already idle - shouldn't happen
-        ESP_LOGW(TAG, "⚠️  PTT release event while IDLE (ghost activation?)");
+        ESP_LOGW(TAG, "PTT release while IDLE (ghost activation?)");
         return;  // Ignore spurious release
     }
 
@@ -147,7 +147,7 @@ bool ptt_control_is_transmitting(void)
 
 void ptt_control_force_idle(void)
 {
-    ESP_LOGW(TAG, "⚠️  PTT FORCE RESET TO IDLE (was %s)",
+    ESP_LOGW(TAG, "PTT force idle (was %s)",
              current_state == PTT_IDLE ? "IDLE" :
              current_state == PTT_LATCHED ? "LATCHED" : "MOMENTARY");
 
