@@ -6,6 +6,7 @@
 #include "call_module.h"
 #include "../config.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 static const char *TAG = "CALL";
 
@@ -17,6 +18,7 @@ static call_state_t current_state = CALL_IDLE;
 static call_state_callback_t user_callback = NULL;
 static bool local_calling = false;
 static bool remote_calling = false;
+static int64_t last_remote_signal_time = 0;
 
 //=============================================================================
 // PRIVATE FUNCTIONS
@@ -95,6 +97,8 @@ void call_module_button_event(bool pressed)
 
 void call_module_remote_signal(bool remote_calling_new)
 {
+    last_remote_signal_time = esp_timer_get_time();
+
     if (remote_calling != remote_calling_new) {
         ESP_LOGI(TAG, "Remote call signal: %s", remote_calling_new ? "ON" : "OFF");
         remote_calling = remote_calling_new;
@@ -115,6 +119,18 @@ bool call_module_is_calling(void)
 bool call_module_is_being_called(void)
 {
     return (current_state == CALL_INCOMING || current_state == CALL_ACKNOWLEDGED);
+}
+
+void call_module_check_timeout(void)
+{
+    if (remote_calling && last_remote_signal_time > 0) {
+        int64_t elapsed_ms = (esp_timer_get_time() - last_remote_signal_time) / 1000;
+        if (elapsed_ms > CALL_TIMEOUT_MS) {
+            ESP_LOGW(TAG, "Remote call signal timeout (%lld ms) - clearing", elapsed_ms);
+            remote_calling = false;
+            update_call_state();
+        }
+    }
 }
 
 void call_module_clear(void)

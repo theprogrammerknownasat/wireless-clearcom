@@ -309,6 +309,11 @@ void udp_transport_reset_stats(void)
     last_rx_sequence = 0;
 }
 
+bool udp_transport_is_initialized(void)
+{
+    return initialized;
+}
+
 void udp_transport_deinit(void)
 {
     if (!initialized) {

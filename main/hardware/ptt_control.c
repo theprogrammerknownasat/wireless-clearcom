@@ -16,9 +16,9 @@ static const char *TAG = "PTT";
 // PRIVATE VARIABLES
 //=============================================================================
 
-static ptt_state_t current_state = PTT_IDLE;
+static volatile ptt_state_t current_state = PTT_IDLE;
 static ptt_state_callback_t user_callback = NULL;
-static bool button_currently_pressed = false;
+static volatile bool button_currently_pressed = false;
 static bool just_latched = false;  // Track if we just entered latch (vs been latched)
 
 //=============================================================================

@@ -27,8 +27,8 @@ static call_callback_t user_call_callback = NULL;
 
 #if DEVICE_TYPE_PACK
 // Button state (pack only)
-static bool ptt_pressed = false;
-static bool call_pressed = false;
+static volatile bool ptt_pressed = false;
+static volatile bool call_pressed = false;
 static int64_t ptt_press_time = 0;
 #endif
 

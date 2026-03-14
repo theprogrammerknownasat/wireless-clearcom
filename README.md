@@ -1,560 +1,234 @@
-# ClearCom Wireless System
+# Wireless Production Intercom
 
-**Production firmware for DIY wireless ClearCom RS-701 belt pack emulation**
+Production firmware for a wireless intercom system compatible with wired party line infrastructure. Provides full-duplex audio between a base station (wired to a party line) and a wireless belt pack with PTT and call signaling, emulating the behavior of an RS-701 belt pack.
 
-A complete wireless intercom system providing professional-grade full-duplex audio communication between a base station (connected to a wired ClearCom party line) and a wireless belt pack with PTT/call functionality.
-
----
-
-## 🎯 Project Goals
-
-**Primary Objective:** Create a reliable, low-latency wireless interface to professional ClearCom intercom systems, enabling crew members to communicate wirelessly while maintaining compatibility with existing wired infrastructure.
-
-**Key Requirements:**
-- **Latency:** <70ms end-to-end for natural conversation
-- **Battery Life:** 12+ hours continuous operation (belt pack)
-- **Audio Quality:** Broadcast-grade voice clarity with Opus codec
-- **Reliability:** Enterprise WiFi with automatic reconnection
-- **Compatibility:** Seamless integration with ClearCom RS-701 party line systems
+Built on ESP32-S3 with WM8960 audio codec, Opus voice compression, and WiFi UDP transport. Designed for reliability in live theatre environments.
 
 ---
 
-## 📋 System Overview
+## System Architecture
 
-### Architecture
 ```
-┌─────────────────┐         WiFi          ┌─────────────────┐
-│   Base Station  │◄──────────────────────►│    Belt Pack    │
-│                 │     UDP Audio Stream   │                 │
-│  ┌───────────┐  │                        │  ┌───────────┐  │
-│  │ ClearCom  │  │                        │  │ Headset   │  │
-│  │ Party Line│◄─┤                        │  │ Mic/Spkr  │  │
-│  └───────────┘  │                        │  └───────────┘  │
-│                 │                        │                 │
-│  ESP32-S3       │                        │  ESP32-S3       │
-│  WM8960 Codec   │                        │  WM8960 Codec   │
-│  LINE I/O       │                        │  MIC/SPEAKER    │
-└─────────────────┘                        │  PTT Button     │
-                                           │  Call Button    │
-                                           │  LiPo Battery   │
-                                           └─────────────────┘
+Wired Party Line (30V DC + audio, 3-pin XLR)
+        |
+  Base Station (WiFi AP)
+  - ESP32-S3 + WM8960
+  - 600:600 transformer I/O
+  - Always transmits partyline audio to pack
+  - Injects pack audio into partyline
+        |
+    WiFi (UDP, Opus @ 24kbps)
+        |
+  Belt Pack (WiFi STA)
+  - ESP32-S3 + WM8960
+  - Headset mic/speaker (4-pin XLR)
+  - PTT (latched/momentary)
+  - Call button
+  - Volume pot (digital via ADC)
+  - Optional battery monitoring
 ```
 
-### Device Types
-
-**Base Station (ID: 0x80+)**
-- WiFi Access Point (192.168.4.1)
-- Connects to ClearCom party line (balanced line input/output)
-- Receives audio from party line, transmits to belt pack via WiFi
-- Receives audio from belt pack, injects into party line
-- Mirrors belt pack PTT state on LED
-
-**Belt Pack (ID: 0x01+)**
-- WiFi Station (connects to base AP)
-- Headset interface (mic input, speaker output)
-- PTT button with latched/momentary modes (200ms hold threshold)
-- Call button for signaling
-- Battery monitoring with low/critical warnings
-- Power management (light sleep after 90s idle, deep sleep after 20min)
+**1:1 pairing** - each base serves exactly one pack. The wired party line sees the base as a normal station.
 
 ---
 
-## 🚀 Quick Start
+## Hardware
+
+- **MCU:** ESP32-S3-WROOM-1U-N8R8 (8MB flash, 8MB PSRAM)
+- **Audio codec:** WM8960 (I2C control @ 0x1A, I2S audio)
+- **Base station:** Powered from 30V party line, audio through 600:600 transformers
+- **Belt pack:** Headset interface, PTT/Call buttons, volume pot, optional LiPo battery
+
+Custom PCB designs (hardware is closed-source).
+
+---
+
+## Building
 
 ### Prerequisites
 
-**Hardware:**
-- 2x ESP32-S3 development boards (one for base, one for pack)
-- 2x WM8960 audio codec breakout boards
-- USB cables for programming
-- (Optional) Breadboard and jumper wires for testing
-
-**Software:**
-- [ESP-IDF v5.5.2](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/get-started/) or later
+- [ESP-IDF v5.5+](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/get-started/)
 - Python 3.8+
-- Git
 
-### Installation
+### Quick Start
 
 ```bash
-# Clone repository
-git clone <repository-url>
-cd clearcom_production
+# Set up ESP-IDF
+source ~/esp/esp-idf/export.sh
 
-# Set up ESP-IDF environment (if not already configured)
-. $HOME/esp/esp-idf/export.sh
+# Select device type in main/config.h:
+#   #define BUILD_BASE_STATION   (or BUILD_BELT_PACK)
 
-# Install dependencies
-cd main
-idf.py add-dependency "esp-opus^1.0.0"
+# Build and flash
+idf.py build
+idf.py -p /dev/ttyUSB0 flash monitor
 ```
+
+Exit monitor: `Ctrl+]`
 
 ### Configuration
 
-**1. Select Device Type**
-
-Edit `main/config.h`:
-
-```c
-// Build as BASE STATION:
-#define BUILD_BASE_STATION
-// #define BUILD_BELT_PACK
-
-// Build as BELT PACK:
-// #define BUILD_BASE_STATION
-#define BUILD_BELT_PACK
-```
-
-**2. Device-Specific Settings**
-
 Configuration is split across three files:
 
-- **`config_common.h`** - Shared settings (WiFi, audio, network)
-- **`config_base.h`** - Base station only (party line gains, mirror LED)
-- **`config_pack.h`** - Belt pack only (buttons, battery, power management)
+| File | Purpose |
+|------|---------|
+| `main/config.h` | Device type selection (base or pack) |
+| `main/config_common.h` | Shared: WiFi, audio, network, jitter buffer |
+| `main/config_base.h` | Base: device ID, party line gains, call detect |
+| `main/config_pack.h` | Pack: buttons, battery mode, sleep, tones, volume |
 
-**3. Hardware Simulation Mode**
+---
 
-For testing without physical WM8960 codec:
+## Features
+
+### Both Devices
+- WM8960 codec driver (I2C + I2S, device-specific register config)
+- Opus voice codec (16kHz mono, 20ms frames, 24kbps)
+- Audio limiter (configurable threshold)
+- Jitter buffer with Opus PLC for WiFi smoothing (configurable, default 2 frames / 40ms)
+- UDP transport with sequence numbers and packet loss tracking
+- Call signaling (button + LED + network) with 2s timeout
+- Hardware watchdog (10s, auto-reboot on hang)
+- Self-test on boot (I2C, ADC, GPIO, Opus, WiFi, NVS) with LED fault codes
+- Status LED: OFF=good, slow blink=packet loss, fast blink=disconnected, solid=error
+
+### Base Station
+- WiFi Access Point (hidden SSID)
+- Always transmits party line audio to connected pack
+- Party line interface via 600:600 transformers (differential I2S output)
+- Call detect from party line (ADC + voltage divider)
+- Call TX to party line (MOSFET driver)
+- PTT mirror LED (shows pack's PTT state)
+
+### Belt Pack
+- WiFi Station (auto-connects to paired base)
+- PTT button with latched/momentary modes (200ms hold threshold, configurable timeout)
+- Call button for signaling
+- Digital volume control (10k pot via ADC, EMA smoothing + deadband)
+- Audio tones (connected, disconnected, battery warnings, call)
+- Sidetone (hear yourself through codec bypass path)
+- Battery monitoring (3 modes: none, external, internal LiPo)
+- Power management (light sleep with WiFi wake, deep sleep with button wake)
+
+---
+
+## PTT Behavior
+
+| Action | Result |
+|--------|--------|
+| Quick press from IDLE | Enter LATCHED (TX on, stays on) |
+| Quick press while LATCHED | Return to IDLE (TX off) |
+| Hold from IDLE | Enter LATCHED, then MOMENTARY after 200ms |
+| Release from MOMENTARY | Return to IDLE |
+| Stuck TX for 5 min (configurable) | Force IDLE (safety timeout) |
+
+---
+
+## Project Structure
+
+```
+main/
+  main.c                    Entry point, tasks, callbacks
+  config.h                  Device type selector
+  config_common.h           Shared configuration
+  config_base.h             Base station config
+  config_pack.h             Belt pack config
+  test_mode_base.c          Base test mode (440Hz tone + RX monitor)
+  test_mode_pack.c          Pack test mode (mic loopback with 2s delay)
+
+  audio/
+    audio_codec.c/h         WM8960 I2C/I2S driver
+    audio_opus.c/h          Opus encode/decode wrapper
+    audio_processor.c/h     Audio limiter
+    audio_tones.c/h         Tone generator
+    audio_jitter_buffer.c/h Receive jitter buffer
+
+  network/
+    wifi_manager.c/h        WiFi AP (base) / STA (pack)
+    udp_transport.c/h       UDP packet TX/RX with stats
+
+  hardware/
+    gpio_control.c/h        LEDs and buttons
+    ptt_control.c/h         PTT state machine
+    battery.c/h             Battery ADC monitoring (pack)
+    volume_control.c/h      Volume pot ADC (pack)
+    clearcom_line.c/h       Party line interface (base)
+
+  system/
+    device_manager.c/h      Device state, status reporting
+    diagnostics.c/h         Self-test framework
+    power_manager.c/h       Sleep modes (pack)
+    call_module.c/h         Call signaling logic
+```
+
+---
+
+## Network Protocol
+
+**UDP packets** on port 5000:
 
 ```c
-// config_common.h
-#define SIMULATE_HARDWARE 1  // Use fake audio data
+typedef struct {
+    uint32_t sequence;      // Packet counter
+    uint32_t timestamp;     // Microseconds
+    uint16_t opus_size;     // Compressed audio size
+    uint8_t  flags;         // Bit 0: PTT, Bit 1: Call
+    uint8_t  reserved;
+    uint8_t  opus_data[];   // Opus compressed audio (~60-80 bytes)
+} audio_packet_t;
 ```
 
-Set to `0` when real hardware is connected.
-
-### Build and Flash
-
-```bash
-# Build firmware
-idf.py build
-
-# Flash to ESP32-S3 and monitor serial output
-idf.py -p /dev/ttyUSB0 flash monitor
-
-# Or separate commands:
-idf.py -p /dev/ttyUSB0 flash
-idf.py -p /dev/ttyUSB0 monitor
-```
-
-**Exit monitor:** `Ctrl+]`
+- Base: always transmitting
+- Pack: transmits only when PTT active
+- WiFi: hidden SSID, WPA2, channel 6 (configurable)
 
 ---
 
-## 📊 Project Status
+## Battery Modes (Belt Pack)
 
-### ✅ Phase 1-6: Core System (COMPLETE)
+Set `BATTERY_MODE` in `config_pack.h`:
 
-**Infrastructure:**
-- [x] Build system with device-type conditional compilation
-- [x] Configuration management (common/base/pack split)
-- [x] Device manager with state machine
-- [x] Self-test diagnostics framework
-- [x] Professional logging system
-
-**Audio Pipeline:**
-- [x] WM8960 codec driver (with simulation mode)
-- [x] Opus encoder/decoder integration (16kHz, 20ms frames, 24kbps)
-- [x] Audio processor with limiter
-- [x] Tone generator for signaling
-
-**Network:**
-- [x] WiFi manager (AP mode for base, STA mode for pack)
-- [x] UDP transport with packet stats (TX/RX/loss tracking)
-- [x] Automatic reconnection handling
-- [x] PMF (Protected Management Frames) configuration
-
-**Hardware:**
-- [x] GPIO control with device-specific LED/button mapping
-- [x] PTT state machine (latched/momentary modes)
-- [x] Battery monitoring with voltage-to-percentage calculation
-- [x] Power management (light/deep sleep)
-- [x] ClearCom party line interface (base only)
-
-**System Services:**
-- [x] Call button signaling
-- [x] Status monitoring and reporting
-- [x] Uptime tracking
-
-### 🔧 Current Focus: Hardware Integration Testing
-
-**What Works:**
-- ✅ Both device types compile and boot successfully
-- ✅ WiFi connection established between base and pack
-- ✅ Network statistics tracking (TX/RX packets, RSSI)
-- ✅ Device manager state transitions
-- ✅ All subsystems initialize without errors
-- ✅ Simulation mode for testing without hardware
-
-**In Testing:**
-- 🧪 GPIO button inputs (PTT, Call)
-- 🧪 LED outputs (Power, Status, Call, PTT/Mirror, RX)
-- 🧪 Audio pipeline end-to-end
-- 🧪 Battery monitoring with real LiPo
-- 🧪 Power management sleep modes
-
-**Known Issues:**
-- ⚠️ **SA Query WiFi Disconnects:** Brief disconnects when USB serial monitor is opened or pack is plugged in. Root cause: USB power fluctuation causing brownout detection. **Impact:** Minimal - connection recovers in <500ms. **Status:** Deferred to stable power testing.
-- ⚠️ **ADC Battery Readings:** Shows CRITICAL when no battery connected (expected - reading floating pin). Works correctly with battery.
-- ⚠️ **Opus Self-Test Fails:** Self-test runs before Opus init, always fails in simulation mode. Benign during development.
-
-### ⏳ Phase 7: Production Hardware Validation (NEXT)
-
-- [ ] PCB design and fabrication
-- [ ] WM8960 codec integration with real audio
-- [ ] ClearCom line transformer interface
-- [ ] Battery charging circuit
-- [ ] Enclosure design
-
-### ⏳ Phase 8: Field Testing (PENDING)
-
-- [ ] End-to-end audio latency measurement
-- [ ] Battery life testing (12+ hour target)
-- [ ] Range testing
-- [ ] Multi-device interference testing
-- [ ] Production environment validation
+| Mode | ADC Monitoring | Sleep Modes | Use Case |
+|------|---------------|-------------|----------|
+| `BATTERY_NONE` | No | No | USB/bench power, initial testing |
+| `BATTERY_EXTERNAL` | No | Yes | USB power bank |
+| `BATTERY_INTERNAL` | Yes | Yes | Onboard LiPo with voltage divider |
 
 ---
 
-## 🔌 Hardware Pinout
+## Status LED Reference
 
-### Common Pins (Both Devices)
-
-**WM8960 Audio Codec (I2S/I2C):**
-```
-I2S_BCK  → GPIO 7   (Bit Clock)
-I2S_WS   → GPIO 8   (Word Select / LRCK)
-I2S_DOUT → GPIO 9   (Data Out to WM8960)
-I2S_DIN  → GPIO 6   (Data In from WM8960)
-I2C_SDA  → GPIO 4   (I2C Data)
-I2C_SCL  → GPIO 5   (I2C Clock)
-```
-
-**Common LEDs:**
-```
-LED_POWER  → GPIO 10  (Power indicator)
-LED_STATUS → GPIO 12  (System status)
-LED_CALL   → GPIO 11  (Call signaling)
-```
-
-### Base Station Specific
-
-**LEDs:**
-```
-LED_PTT_MIRROR → GPIO 13  (Mirrors pack's PTT state)
-```
-
-**ClearCom Interface:**
-- LINE_IN (balanced) via WM8960 line input
-- LINE_OUT (balanced) via WM8960 line output
-- Party line input gain: 20dB
-- Party line output gain: 20dB
-
-### Belt Pack Specific
-
-**Buttons (Active-Low, Internal Pull-Up):**
-```
-BUTTON_PTT  → GPIO 13  (Push-to-Talk)
-BUTTON_CALL → GPIO 14  (Call signaling)
-```
-
-**LEDs:**
-```
-LED_PTT     → GPIO 15  (PTT active indicator)
-LED_RECEIVE → GPIO 16  (RX audio indicator - optional)
-```
-
-**Battery:**
-```
-BATTERY_ADC → ADC1 Channel 0
-  Voltage thresholds:
-  - Full:     4.2V (100%)
-  - Low:      3.4V (warn user)
-  - Critical: 3.2V (force shutdown)
-```
+| Pattern | Meaning |
+|---------|---------|
+| OFF | Everything OK |
+| Slow blink | Packet loss > 2% |
+| Fast blink | WiFi disconnected |
+| Solid ON | System error |
+| N blinks + pause (boot) | Self-test fault code (N = test number) |
 
 ---
 
-## 🛠️ Testing Guide
+## Test Mode
 
-### Serial Console Commands
+Set `TEST_MODE_ENABLE 1` in `config_common.h`. Disables normal audio task to avoid I2S contention.
 
-Monitor real-time system status via UART (115200 baud):
-
-```
-========================================
-  ClearCom Wireless System
-  BELT PACK
-========================================
-Firmware: 1.0.0
-Device ID: 0x01
-Paired Base: 0x80
-
-╔════════════════════════════════════════╗
-║ BELT PACK - ID: 0x01 - Uptime: 00:08  ║
-╠════════════════════════════════════════╣
-║ State: 3 | WiFi: CONN | RSSI: -10 dBm ║
-║ TX:    0 | RX:    0 | Lost:    0      ║
-║ PTT: 0 | Call: 0 | Battery: 3.7V (85%)║
-╚════════════════════════════════════════╝
-
-Network: TX=0, RX=0, Loss=0.00%
-```
-
-**Status updates print every 5 seconds.**
-
-### Button Testing (Without Breadboard)
-
-Use female-to-female dupont wires to test buttons:
-
-**PTT Button (GPIO 13):**
-1. Connect one wire to GPIO 13, other to GND
-2. Touch wires together to simulate button press
-3. **Expected:** Status shows `PTT: 1`, LED_PTT lights up, TX packets increment
-
-**Call Button (GPIO 14):**
-1. Connect one wire to GPIO 14, other to GND
-2. Touch wires together to simulate button press
-3. **Expected:** Status shows `Call: 1`, LED_CALL lights up
-
-### LED Testing
-
-LEDs can be tested by connecting an LED + current-limiting resistor (220Ω-1kΩ) between the GPIO pin and GND:
-
-```
-GPIO Pin ──┬── LED (Anode)
-           │
-           └── Resistor (220Ω)
-                │
-               GND
-```
-
-**On boot:**
-- LED_POWER should light immediately (solid ON)
-- Other LEDs may blink during init
-
-**During operation:**
-- LED_STATUS blinks at different rates based on system state
-- LED_PTT (pack) lights when PTT pressed
-- LED_PTT_MIRROR (base) mirrors pack's PTT state
-- LED_CALL lights when call button pressed
-
-### WiFi Connection Test
-
-**Expected behavior:**
-1. Base starts as AP: `WiFi: CONN` immediately
-2. Pack connects: `WiFi: CONN` after 2-3 seconds
-3. RSSI shows actual signal strength: `-10 dBm` to `-30 dBm` typical
-4. No disconnects under stable power conditions
-
-**If pack won't connect:**
-- Check `config_common.h` has matching SSID/password
-- Verify base is running and shows `Access Point started`
-- Check WiFi channel isn't congested (default: channel 6)
-
-### Audio Pipeline Test (Simulation Mode)
-
-With `SIMULATE_HARDWARE=1`:
-- Fake audio data is generated instead of reading from codec
-- Audio task runs at 50Hz (20ms frames)
-- Opus encoder/decoder process data normally
-- **To verify:** Check TX packets increment when PTT pressed
+- **Base:** Outputs 440Hz sine wave to party line, monitors and logs input levels
+- **Pack:** Microphone loopback with 2-second delay to verify codec
 
 ---
 
-## 📁 Project Structure
+## Known Issues
 
-```
-clearcom_production/
-├── main/
-│   ├── main.c                 # Application entry point
-│   ├── config.h               # Device type selection
-│   ├── config_common.h        # Shared configuration
-│   ├── config_base.h          # Base station config
-│   ├── config_pack.h          # Belt pack config
-│   │
-│   ├── audio/                 # Audio subsystem
-│   │   ├── codec_wm8960.c     # WM8960 driver
-│   │   ├── opus_codec.c       # Opus encoder/decoder
-│   │   ├── audio_processor.c  # Audio processing/limiter
-│   │   └── tone_generator.c   # Call tone generation
-│   │
-│   ├── network/               # Network subsystem
-│   │   ├── wifi_manager.c     # WiFi AP/STA management
-│   │   └── udp_transport.c    # UDP packet transport
-│   │
-│   ├── hardware/              # Hardware interfaces
-│   │   ├── gpio_control.c     # LEDs and buttons
-│   │   ├── ptt_control.c      # PTT state machine
-│   │   ├── battery.c          # Battery monitoring (pack)
-│   │   └── clearcom_line.c    # Party line interface (base)
-│   │
-│   └── system/                # System services
-│       ├── device_manager.c   # Device state management
-│       ├── diagnostics.c      # Self-test framework
-│       ├── power_manager.c    # Sleep management (pack)
-│       └── call_module.c      # Call signaling
-│
-├── CMakeLists.txt
-├── README.md                  # This file
-├── SPECIFICATION.md           # Detailed technical specs
-└── KNOWN_ISSUES.md            # Development notes
-```
+- **Partition space:** Belt pack binary is near the 1MB app partition limit at 2MB flash config. The N8R8 module has 8MB flash -- reconfigure via `idf.py menuconfig` > Serial flasher config > Flash size > 8MB.
+- **Battery ADC:** Reads floating pin as ~0V when no battery connected (expected). Set `BATTERY_MODE` to `BATTERY_NONE` to disable.
+- **SA Query disconnects:** Brief WiFi drops when USB serial monitor is opened due to power fluctuation. Connection recovers automatically.
 
 ---
 
-## 🔧 Configuration Reference
+## License
 
-### WiFi Settings (`config_common.h`)
-
-```c
-#define WIFI_SSID            "ClearCom_Base"
-#define WIFI_PASSWORD        "clearcom123"
-#define WIFI_CHANNEL         6
-#define WIFI_HIDDEN_SSID     1   // Hide SSID from broadcast
-#define MAX_STA_CONN         1   // Only allow one pack per base
-```
-
-### Audio Settings (`config_common.h`)
-
-```c
-#define SAMPLE_RATE          16000   // Hz
-#define OPUS_FRAME_SIZE      320     // Samples (20ms @ 16kHz)
-#define OPUS_BITRATE         24000   // bps
-#define AUDIO_BUFFER_COUNT   8       // Ring buffer size
-```
-
-### Device Pairing (`config_common.h`)
-
-```c
-#define BASE_DEVICE_ID       0x80  // Base station ID
-#define PACK_DEVICE_ID       0x01  // Belt pack ID
-```
-
-**Note:** 1:1 pairing model - each base is paired with exactly one pack.
-
-### PTT Behavior (`config_pack.h`)
-
-```c
-#define PTT_HOLD_THRESHOLD_MS  200  // ms - hold for momentary mode
-```
-
-**PTT Modes:**
-- **Latched:** Quick press (<200ms) toggles TX on/off
-- **Momentary:** Hold (≥200ms) to TX, release to stop
-
-### Battery Monitoring (`config_pack.h`)
-
-```c
-#define BATTERY_FULL_VOLTAGE      4.2   // V
-#define BATTERY_EMPTY_VOLTAGE     3.0   // V
-#define BATTERY_LOW_VOLTAGE       3.4   // V (warning)
-#define BATTERY_CRITICAL_VOLTAGE  3.2   // V (force shutdown)
-```
-
-### Power Management (`config_pack.h`)
-
-```c
-#define ENABLE_LIGHT_SLEEP        1
-#define LIGHT_SLEEP_TIMEOUT_SEC   90    // Idle time before sleep
-#define DEEP_SLEEP_TIMEOUT_MIN    20    // Idle time before deep sleep
-```
+Personal project - not for commercial distribution.
 
 ---
 
-## 🐛 Troubleshooting
-
-### Build Errors
-
-**"Multiple device types defined"**
-- Fix: Only define ONE of `BUILD_BASE_STATION` or `BUILD_BELT_PACK` in `config.h`
-
-**"esp-opus component not found"**
-- Fix: Run `idf.py add-dependency "esp-opus^1.0.0"` in `main/` directory
-
-**"LED_PTT undeclared" (when building base)**
-- Fix: This is expected - `LED_PTT` only exists for pack. Check that `DEVICE_TYPE_PACK` conditionals are correct.
-
-### Runtime Issues
-
-**Base: "WiFi: DISC" even though AP started**
-- Status: Fixed in latest version - should show "CONN"
-- If still seeing: Check `device_manager_update_wifi()` is called in WiFi event handler
-
-**Pack: Can't connect to base**
-- Check: Base shows `Access Point started` in logs
-- Check: SSID/password match in both devices' config files
-- Check: WiFi channel is available (scan with phone)
-
-**Pack: Battery shows CRITICAL**
-- Expected if no battery connected - ADC reads floating pin
-- Connect 3.7V LiPo to test real battery monitoring
-
-**TX/RX packets remain 0**
-- Expected: Audio only transmits when PTT is pressed
-- Test: Short GPIO 13 to GND to trigger PTT
-
-**SA Query disconnects every 20-30 seconds**
-- Known issue during USB development
-- Defer to stable power testing
-- Connection recovers automatically
-
----
-
-## 📚 Additional Documentation
-
-- **`SPECIFICATION.md`** - Complete technical specifications
-- **`KNOWN_ISSUES.md`** - Development notes and deferred items
-- **ESP-IDF Documentation:** https://docs.espressif.com/projects/esp-idf/
-
----
-
-## 🎛️ Device IDs and Networking
-
-**ID Assignment:**
-- Base stations: `0x80` - `0xFF`
-- Belt packs: `0x01` - `0x7F`
-
-**Network Configuration:**
-- Base IP: `192.168.4.1` (WiFi AP)
-- Pack IP: `192.168.4.2` (DHCP assigned)
-- UDP Port: `5000` (both devices)
-
-**Pairing:**
-- Each base is paired with exactly one pack (1:1 model)
-- Pairing configured in `config_common.h`
-- Future: Multi-pack support with ID-based routing
-
----
-
-## ⚡ Performance Targets
-
-| Metric | Target | Current Status |
-|--------|--------|----------------|
-| End-to-end latency | <70ms | Pending measurement |
-| Audio quality | Broadcast-grade | Opus 24kbps @ 16kHz |
-| WiFi range | 50m+ line-of-sight | Pending field test |
-| Battery life (pack) | 12+ hours | Pending real battery test |
-| Packet loss tolerance | <5% | UDP with stats tracking |
-| Boot time | <5 seconds | ~4 seconds measured |
-
----
-
-## 📝 License
-
-Personal project - not for commercial use.
-
----
-
-## 🙏 Acknowledgments
-
-- ESP-IDF framework by Espressif Systems
-- Opus audio codec by Xiph.Org Foundation
-- WM8960 codec by Cirrus Logic
-
----
-
-**Last Updated:** February 9, 2026  
-**Firmware Version:** 1.0.0  
-**Build:** 4f27161-dirty
+**Firmware Version:** 1.0.0

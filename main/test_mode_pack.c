@@ -33,7 +33,7 @@ static const char *TAG = "TEST_MODE";
 // PRIVATE VARIABLES
 //=============================================================================
 
-static bool test_mode_running = false;
+static volatile bool test_mode_running = false;
 static TaskHandle_t test_task_handle = NULL;
 
 // Circular delay buffer for loopback

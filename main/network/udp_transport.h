@@ -104,6 +104,12 @@ void udp_transport_get_stats(udp_stats_t *stats);
 void udp_transport_reset_stats(void);
 
 /**
+ * @brief Check if UDP transport has been initialized
+ * @return true if initialized, false otherwise
+ */
+bool udp_transport_is_initialized(void);
+
+/**
  * @brief Deinitialize UDP transport
  */
 void udp_transport_deinit(void);

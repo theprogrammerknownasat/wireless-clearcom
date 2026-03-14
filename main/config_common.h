@@ -32,6 +32,26 @@
 // Recommend: 5 for balance
 #define OPUS_COMPLEXITY         5
 
+// Jitter buffer: absorbs WiFi timing jitter on the receive path.
+// A dedicated playback task drains the buffer at a steady 20ms cadence.
+// 0 = disabled (decoded audio written directly to I2S from the UDP callback)
+// 1 = enabled  (recommended for production use)
+#define JITTER_BUFFER_ENABLE    1
+
+// Number of decoded PCM frames held in the jitter buffer.
+// Each frame is FRAME_SIZE_MS (20 ms), so the total buffering latency is
+// JITTER_BUFFER_FRAMES * 20 ms.
+//
+// Trade-off:
+//   Lower value  -> less latency, but more likely to underrun on WiFi jitter
+//   Higher value -> smoother playback, but adds latency
+//
+// 2 frames (40 ms) is the practical minimum: one frame is being played
+// while the next can arrive up to 20 ms early or late without a gap.
+// For a real-time intercom the extra 40 ms is acceptable and eliminates
+// most WiFi-induced audio glitches.
+#define JITTER_BUFFER_FRAMES    2
+
 // Enable audio limiter to prevent clipping
 // 0 = disabled, 1 = enabled (recommended)
 #define ENABLE_AUDIO_LIMITER    1
@@ -112,6 +132,10 @@
 //=============================================================================
 // TIMING CONSTANTS
 //=============================================================================
+
+// Call signal timeout (milliseconds)
+// If no remote call signal received within this time, clear remote call state
+#define CALL_TIMEOUT_MS         2000
 
 // Network reconnect delay (milliseconds)
 #define WIFI_RECONNECT_DELAY_MS 2000

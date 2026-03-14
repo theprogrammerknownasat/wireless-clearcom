@@ -75,6 +75,12 @@ esp_err_t wifi_manager_get_ip(char *ip_str);
 uint8_t wifi_manager_get_sta_count(void);
 
 /**
+ * @brief Check if WiFi manager has been initialized
+ * @return true if initialized, false otherwise
+ */
+bool wifi_manager_is_initialized(void);
+
+/**
  * @brief Deinitialize WiFi manager
  */
 void wifi_manager_deinit(void);

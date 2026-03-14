@@ -76,6 +76,12 @@ bool call_module_is_calling(void);
 bool call_module_is_being_called(void);
 
 /**
+ * @brief Check for remote call signal timeout
+ * Clears remote_calling if no signal received within CALL_TIMEOUT_MS
+ */
+void call_module_check_timeout(void);
+
+/**
  * @brief Clear call (hang up)
  */
 void call_module_clear(void);

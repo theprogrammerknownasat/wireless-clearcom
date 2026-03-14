@@ -168,6 +168,20 @@ static const tone_config_t TONE_CALL = {
 };
 
 //=============================================================================
+// BATTERY CONFIGURATION
+//=============================================================================
+
+// Battery configuration mode:
+// BATTERY_NONE     = 0  - No battery (USB/external power only). Disables battery monitoring AND sleep.
+// BATTERY_EXTERNAL = 1  - External battery (USB power bank etc). No voltage monitoring, but keeps sleep modes.
+// BATTERY_INTERNAL = 2  - Internal LiPo with ADC monitoring. Full battery + sleep functionality.
+#define BATTERY_NONE        0
+#define BATTERY_EXTERNAL    1
+#define BATTERY_INTERNAL    2
+
+#define BATTERY_MODE        BATTERY_NONE    // Default to no battery for initial testing
+
+//=============================================================================
 // POWER MANAGEMENT (Belt Pack)
 //=============================================================================
 

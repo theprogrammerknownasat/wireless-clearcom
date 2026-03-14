@@ -14,6 +14,9 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+#include "esp_task_wdt.h"
+#include "esp_timer.h"
+
 #include "config.h"
 #include "system/device_manager.h"
 #include "system/diagnostics.h"
@@ -23,6 +26,7 @@
 #include "audio/audio_opus.h"
 #include "audio/audio_processor.h"
 #include "audio/audio_tones.h"
+#include "audio/audio_jitter_buffer.h"
 #include "network/wifi_manager.h"
 #include "network/udp_transport.h"
 #include "hardware/gpio_control.h"
@@ -77,7 +81,7 @@ static void udp_rx_handler(const uint8_t *opus_data, uint16_t opus_size,
 {
     device_manager_packet_received();
 
-#if DEVICE_TYPE_PACK
+#if DEVICE_TYPE_PACK && (BATTERY_MODE != BATTERY_NONE)
     power_manager_activity();
 #endif
 
@@ -92,7 +96,11 @@ static void udp_rx_handler(const uint8_t *opus_data, uint16_t opus_size,
 
     if (decoded > 0) {
         audio_processor_limit(pcm_output, decoded, LIMITER_THRESHOLD);
+#if JITTER_BUFFER_ENABLE
+        jitter_buffer_push(pcm_output, decoded);
+#else
         audio_codec_write(pcm_output, decoded);
+#endif
     }
 }
 
@@ -111,9 +119,11 @@ static void ptt_state_handler(ptt_state_t state, bool transmitting)
         udp_transport_send(silent_packet, 60, false, call_active);
     }
 
+#if (BATTERY_MODE != BATTERY_NONE)
     if (transmitting) {
         power_manager_activity();
     }
+#endif
 #else
     gpio_control_set_led(LED_PTT_MIRROR, transmitting ? LED_ON : LED_OFF);
 #endif
@@ -141,15 +151,20 @@ static void call_state_handler(call_state_t state, bool is_calling)
 static void ptt_button_handler(bool pressed, uint32_t hold_time_ms)
 {
     ptt_control_button_event(pressed, hold_time_ms);
+#if (BATTERY_MODE != BATTERY_NONE)
     power_manager_activity();
+#endif
 }
 
 static void call_button_handler(bool pressed)
 {
     call_module_button_event(pressed);
+#if (BATTERY_MODE != BATTERY_NONE)
     power_manager_activity();
+#endif
 }
 
+#if (BATTERY_MODE == BATTERY_INTERNAL)
 static void battery_status_handler(float voltage, uint8_t percent,
                                    bool is_low, bool is_critical)
 {
@@ -163,14 +178,17 @@ static void battery_status_handler(float voltage, uint8_t percent,
                         TONE_BATTERY_LOW.duration_ms, 0.3f);
     }
 }
+#endif // BATTERY_MODE == BATTERY_INTERNAL
 
+#if (BATTERY_MODE != BATTERY_NONE)
 static void power_state_handler(power_state_t state)
 {
     ESP_LOGI(TAG, "Power: %s",
              state == POWER_STATE_ACTIVE ? "ACTIVE" :
              state == POWER_STATE_LIGHT_SLEEP ? "LIGHT_SLEEP" : "DEEP_SLEEP");
 }
-#endif
+#endif // BATTERY_MODE != BATTERY_NONE
+#endif // DEVICE_TYPE_PACK
 
 //=============================================================================
 // AUDIO TASK
@@ -179,6 +197,7 @@ static void power_state_handler(power_state_t state)
 static void audio_task(void *arg)
 {
     ESP_LOGI(TAG, "Audio task started");
+    esp_task_wdt_add(NULL);
 
     int16_t pcm_input[SAMPLES_PER_FRAME];
     uint8_t opus_data[OPUS_MAX_PACKET_SIZE];
@@ -186,18 +205,74 @@ static void audio_task(void *arg)
     while (1) {
         // I2S read blocks until DMA buffer fills (~20ms at 16kHz)
         // This naturally paces the loop - no additional delay needed
+        esp_task_wdt_reset();
         esp_err_t ret = audio_codec_read(pcm_input, SAMPLES_PER_FRAME, NULL);
 
-        if (ret == ESP_OK && ptt_control_is_transmitting()) {
+        if (ret == ESP_OK) {
+#if DEVICE_TYPE_BASE
+            // Base always transmits partyline audio to the pack
             int encoded_bytes = audio_opus_encode(pcm_input, SAMPLES_PER_FRAME,
                                                   opus_data, OPUS_MAX_PACKET_SIZE);
             if (encoded_bytes > 0) {
                 bool call_active = call_module_is_calling();
                 udp_transport_send(opus_data, encoded_bytes, true, call_active);
             }
+#elif DEVICE_TYPE_PACK
+            // Pack only transmits when PTT is active
+            if (ptt_control_is_transmitting()) {
+                int encoded_bytes = audio_opus_encode(pcm_input, SAMPLES_PER_FRAME,
+                                                      opus_data, OPUS_MAX_PACKET_SIZE);
+                if (encoded_bytes > 0) {
+                    bool call_active = call_module_is_calling();
+                    udp_transport_send(opus_data, encoded_bytes, true, call_active);
+                }
+            }
+#endif
         }
     }
 }
+
+//=============================================================================
+// JITTER BUFFER PLAYBACK TASK
+//=============================================================================
+
+#if JITTER_BUFFER_ENABLE
+static void jitter_playback_task(void *arg)
+{
+    ESP_LOGI(TAG, "Jitter playback task started");
+    esp_task_wdt_add(NULL);
+
+    TickType_t last_wake = xTaskGetTickCount();
+    int16_t pcm_frame[SAMPLES_PER_FRAME];
+    int64_t last_underrun_log_us = 0;
+
+    while (1) {
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(FRAME_SIZE_MS));
+        esp_task_wdt_reset();
+
+        if (jitter_buffer_pop(pcm_frame, SAMPLES_PER_FRAME)) {
+            audio_codec_write(pcm_frame, SAMPLES_PER_FRAME);
+        } else {
+            // Buffer underrun - use Opus PLC to generate a concealment frame
+            int plc_samples = audio_opus_decode(NULL, 0, pcm_frame, SAMPLES_PER_FRAME, 1);
+            if (plc_samples > 0) {
+                audio_codec_write(pcm_frame, plc_samples);
+            } else {
+                // PLC failed, output silence
+                memset(pcm_frame, 0, SAMPLES_PER_FRAME * sizeof(int16_t));
+                audio_codec_write(pcm_frame, SAMPLES_PER_FRAME);
+            }
+
+            // Rate-limit underrun warnings to once per second
+            int64_t now_us = esp_timer_get_time();
+            if (now_us - last_underrun_log_us > 1000000) {
+                ESP_LOGW(TAG, "Jitter buffer underrun");
+                last_underrun_log_us = now_us;
+            }
+        }
+    }
+}
+#endif // JITTER_BUFFER_ENABLE
 
 //=============================================================================
 // MONITORING TASK
@@ -205,6 +280,7 @@ static void audio_task(void *arg)
 
 static void monitor_task(void *arg)
 {
+    esp_task_wdt_add(NULL);
     TickType_t last_wake = xTaskGetTickCount();
     uint32_t stats_counter = 0;
 
@@ -214,7 +290,11 @@ static void monitor_task(void *arg)
 
     while (1) {
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(1000));
+        esp_task_wdt_reset();
         stats_counter++;
+
+        // Check for remote call signal timeout
+        call_module_check_timeout();
 
 #if DEVICE_TYPE_PACK && PTT_TIMEOUT_ENABLE
         if (ptt_control_is_transmitting()) {
@@ -253,7 +333,7 @@ static void monitor_task(void *arg)
             }
         }
 
-#if DEVICE_TYPE_PACK
+#if DEVICE_TYPE_PACK && (BATTERY_MODE != BATTERY_NONE)
         bool light_sleep, deep_sleep;
         power_manager_check_timeout(&light_sleep, &deep_sleep);
 
@@ -292,6 +372,11 @@ static esp_err_t init_subsystems(void)
     ret = audio_tones_init();
     if (ret != ESP_OK) return ret;
 
+#if JITTER_BUFFER_ENABLE
+    ret = jitter_buffer_init();
+    if (ret != ESP_OK) return ret;
+#endif
+
     ESP_LOGI(TAG, "Initializing network...");
     ret = wifi_manager_init(wifi_event_handler);
     if (ret != ESP_OK) return ret;
@@ -318,10 +403,18 @@ static esp_err_t init_subsystems(void)
     if (ret != ESP_OK) return ret;
 
 #if DEVICE_TYPE_PACK
+    // battery_init always runs to create the shared ADC1 handle (used by volume control)
+#if (BATTERY_MODE == BATTERY_INTERNAL)
     ret = battery_init(battery_status_handler);
+#else
+    ret = battery_init(NULL);
+#endif
     if (ret != ESP_OK) return ret;
+
+#if (BATTERY_MODE == BATTERY_INTERNAL)
     ret = battery_start();
     if (ret != ESP_OK) return ret;
+#endif
 
     // Volume pot shares ADC1 with battery -- must init after battery
     ret = volume_control_init();
@@ -345,7 +438,7 @@ static esp_err_t init_subsystems(void)
     ret = call_module_init(call_state_handler);
     if (ret != ESP_OK) return ret;
 
-#if DEVICE_TYPE_PACK
+#if DEVICE_TYPE_PACK && (BATTERY_MODE != BATTERY_NONE)
     ret = power_manager_init(power_state_handler);
     if (ret != ESP_OK) return ret;
 #endif
@@ -391,6 +484,15 @@ void app_main(void)
         while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
 
+    // Configure task watchdog - reboots on timeout for fastest recovery
+    esp_task_wdt_config_t wdt_config = {
+        .timeout_ms = WATCHDOG_TIMEOUT_SEC * 1000,
+        .trigger_panic = true,
+        .idle_core_mask = 0,
+    };
+    ESP_ERROR_CHECK(esp_task_wdt_reconfigure(&wdt_config));
+    ESP_LOGI(TAG, "Watchdog configured: %ds timeout", WATCHDOG_TIMEOUT_SEC);
+
     // Self-test
     diagnostics_result_t diag_results;
     ret = diagnostics_run_self_test(&diag_results);
@@ -420,6 +522,9 @@ void app_main(void)
     ESP_LOGW(TAG, "TEST MODE - audio task disabled");
 #else
     xTaskCreate(audio_task, "audio", 32768, NULL, 6, NULL);
+#if JITTER_BUFFER_ENABLE
+    xTaskCreate(jitter_playback_task, "jitter_pb", 4096, NULL, 6, NULL);
+#endif
 #endif
     xTaskCreate(monitor_task, "monitor", 4096, NULL, 3, NULL);
 

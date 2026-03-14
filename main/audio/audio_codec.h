@@ -41,4 +41,10 @@ esp_err_t audio_codec_write(const int16_t *buffer, size_t sample_count);
 esp_err_t audio_codec_set_sidetone(bool enable, float level);
 void audio_codec_deinit(void);
 
+/**
+ * @brief Check if audio codec was successfully initialized
+ * @return true if initialized, false otherwise
+ */
+bool audio_codec_is_initialized(void);
+
 #endif // AUDIO_CODEC_H

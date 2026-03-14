@@ -11,6 +11,7 @@ idf_component_register(
         "audio/audio_opus.c"
         "audio/audio_processor.c"
         "audio/audio_tones.c"
+        "audio/audio_jitter_buffer.c"
         # Phase 3 network files:
         "network/wifi_manager.c"
         "network/udp_transport.c"

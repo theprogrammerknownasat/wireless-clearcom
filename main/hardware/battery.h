@@ -74,6 +74,12 @@ bool battery_is_low(void);
 bool battery_is_critical(void);
 
 /**
+ * @brief Read battery voltage once (for self-test)
+ * @return Battery voltage in volts, or -1.0f if ADC not initialized
+ */
+float battery_read_voltage_once(void);
+
+/**
  * @brief Deinitialize battery monitoring
  */
 void battery_deinit(void);

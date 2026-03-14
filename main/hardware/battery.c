@@ -20,8 +20,10 @@ static const char *TAG = "BATTERY";
 //=============================================================================
 
 static bool initialized = false;
-static bool running = false;
 static adc_oneshot_unit_handle_t adc_handle = NULL;
+
+#if (BATTERY_MODE == BATTERY_INTERNAL)
+static bool running = false;
 static battery_callback_t user_callback = NULL;
 static TaskHandle_t battery_task_handle = NULL;
 
@@ -31,7 +33,7 @@ static bool is_low = false;
 static bool is_critical = false;
 
 //=============================================================================
-// PRIVATE FUNCTIONS
+// PRIVATE FUNCTIONS (BATTERY_INTERNAL only)
 //=============================================================================
 
 static uint8_t voltage_to_percent(float voltage)
@@ -63,13 +65,13 @@ static float read_battery_voltage(void)
     }
 
     // Convert ADC reading to voltage
-    // ESP32-S3 ADC: 12-bit (0-4095), reference voltage ~1.1V
-    // With voltage divider: Vbat = ADC_reading * (1.1V / 4095) * divider_ratio
+    // ESP32-S3 ADC with ADC_ATTEN_DB_12: input range ~0-3.3V
+    // 12-bit resolution (0-4095)
+    // With voltage divider: Vbat = (ADC_reading / 4095) * 3.3V * divider_ratio
     // Assuming 2:1 voltage divider (adjust for your hardware)
-    const float adc_ref = 1.1f;
     const float divider_ratio = 2.0f;
 
-    float voltage = (adc_reading / 4095.0f) * adc_ref * divider_ratio;
+    float voltage = (adc_reading / 4095.0f) * 3.3f * divider_ratio;
 
     return voltage;
 }
@@ -116,6 +118,7 @@ static void battery_task(void *arg)
     ESP_LOGI(TAG, "Battery monitoring task stopped");
     vTaskDelete(NULL);
 }
+#endif // BATTERY_MODE == BATTERY_INTERNAL
 
 //=============================================================================
 // PUBLIC FUNCTIONS
@@ -124,15 +127,13 @@ static void battery_task(void *arg)
 esp_err_t battery_init(battery_callback_t callback)
 {
     if (initialized) {
-        ESP_LOGW(TAG, "Battery monitoring already initialized");
+        ESP_LOGW(TAG, "Battery already initialized");
         return ESP_OK;
     }
 
-    ESP_LOGI(TAG, "Initializing battery monitoring...");
+    ESP_LOGI(TAG, "Initializing battery (mode=%d)...", BATTERY_MODE);
 
-    user_callback = callback;
-
-    // Configure ADC
+    // Always create the ADC unit handle -- volume control shares it
     adc_oneshot_unit_init_cfg_t init_config = {
         .unit_id = ADC_UNIT_1,
     };
@@ -143,6 +144,10 @@ esp_err_t battery_init(battery_callback_t callback)
         return ret;
     }
 
+#if (BATTERY_MODE == BATTERY_INTERNAL)
+    user_callback = callback;
+
+    // Configure battery ADC channel (only needed for internal battery monitoring)
     adc_oneshot_chan_cfg_t chan_config = {
         .bitwidth = ADC_BITWIDTH_12,
         .atten = ADC_ATTEN_DB_12,  // 0-3.3V range
@@ -156,14 +161,19 @@ esp_err_t battery_init(battery_callback_t callback)
         return ret;
     }
 
-    initialized = true;
     ESP_LOGI(TAG, "Battery monitoring initialized (ADC channel %d)", BATTERY_ADC_CHANNEL);
+#else
+    (void)callback;  // Unused when not BATTERY_INTERNAL
+    ESP_LOGI(TAG, "ADC unit initialized (battery monitoring disabled, mode=%d)", BATTERY_MODE);
+#endif
 
+    initialized = true;
     return ESP_OK;
 }
 
 esp_err_t battery_start(void)
 {
+#if (BATTERY_MODE == BATTERY_INTERNAL)
     if (!initialized) {
         ESP_LOGE(TAG, "Battery monitoring not initialized");
         return ESP_FAIL;
@@ -178,12 +188,14 @@ esp_err_t battery_start(void)
 
     running = true;
     xTaskCreate(battery_task, "battery", 4096, NULL, 2, &battery_task_handle);
+#endif
 
     return ESP_OK;
 }
 
 esp_err_t battery_stop(void)
 {
+#if (BATTERY_MODE == BATTERY_INTERNAL)
     if (!running) {
         return ESP_OK;
     }
@@ -196,28 +208,57 @@ esp_err_t battery_stop(void)
         vTaskDelay(pdMS_TO_TICKS(100));
         battery_task_handle = NULL;
     }
+#endif
 
     return ESP_OK;
 }
 
 float battery_get_voltage(void)
 {
+#if (BATTERY_MODE == BATTERY_INTERNAL)
     return current_voltage;
+#else
+    return 0.0f;
+#endif
 }
 
 uint8_t battery_get_percent(void)
 {
+#if (BATTERY_MODE == BATTERY_INTERNAL)
     return current_percent;
+#else
+    return 0;
+#endif
 }
 
 bool battery_is_low(void)
 {
+#if (BATTERY_MODE == BATTERY_INTERNAL)
     return is_low;
+#else
+    return false;
+#endif
 }
 
 bool battery_is_critical(void)
 {
+#if (BATTERY_MODE == BATTERY_INTERNAL)
     return is_critical;
+#else
+    return false;
+#endif
+}
+
+float battery_read_voltage_once(void)
+{
+#if (BATTERY_MODE == BATTERY_INTERNAL)
+    if (!initialized || !adc_handle) {
+        return -1.0f;
+    }
+    return read_battery_voltage();
+#else
+    return -1.0f;
+#endif
 }
 
 void battery_deinit(void)
@@ -226,7 +267,7 @@ void battery_deinit(void)
         return;
     }
 
-    ESP_LOGI(TAG, "Deinitializing battery monitoring...");
+    ESP_LOGI(TAG, "Deinitializing battery...");
 
     battery_stop();
 
@@ -236,7 +277,7 @@ void battery_deinit(void)
     }
 
     initialized = false;
-    ESP_LOGI(TAG, "Battery monitoring deinitialized");
+    ESP_LOGI(TAG, "Battery deinitialized");
 }
 
 void *battery_get_adc_handle(void)

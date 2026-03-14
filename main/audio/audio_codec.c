@@ -383,6 +383,11 @@ esp_err_t audio_codec_write(const int16_t *buffer, size_t sample_count)
     return ret;
 }
 
+bool audio_codec_is_initialized(void)
+{
+    return initialized;
+}
+
 esp_err_t audio_codec_set_sidetone(bool enable, float level)
 {
     ESP_LOGI(TAG, "Sidetone: %s (%.2f)", enable ? "ON" : "OFF", level);

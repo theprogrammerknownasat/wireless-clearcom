@@ -289,6 +289,11 @@ uint8_t wifi_manager_get_sta_count(void)
 #endif
 }
 
+bool wifi_manager_is_initialized(void)
+{
+    return initialized;
+}
+
 void wifi_manager_deinit(void)
 {
     if (!initialized) {

@@ -30,7 +30,7 @@ static const char *TAG = "TEST_BASE";
 // Set to 1 to also monitor call detection ADC during test
 #define TEST_CALL_MONITORING    0
 
-static bool test_running = false;
+static volatile bool test_running = false;
 static TaskHandle_t audio_task_handle = NULL;
 static TaskHandle_t call_task_handle = NULL;
 static adc_oneshot_unit_handle_t adc_handle = NULL;
